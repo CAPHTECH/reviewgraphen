@@ -4,6 +4,7 @@
 //! non-authority contracts are implemented. Fixed-fixture review is never a
 //! product command.
 
+use artifact_root::{AdmittedRoot, PlannedFile, WritePlan};
 use jsonschema::{Resource, Validator};
 use reviewgraphen_core::{ContentHash, canonical_json};
 use reviewgraphen_runtime::diagnostics::{
@@ -13,10 +14,11 @@ use reviewgraphen_runtime::diagnostics::{
 use reviewgraphen_runtime::generic::{
     GENERIC_REVIEW_REQUEST_V2_SCHEMA, GENERIC_REVIEW_REQUEST_V3_SCHEMA,
     GENERIC_REVIEW_REQUEST_V4_SCHEMA, GenericReviewRequest, GenericReviewRequestV2,
-    GenericReviewRequestV3, GenericReviewRequestV4, admit_fresh_generic_review_artifact_root_v2,
-    run_generic_review, run_generic_review_v2_with_observer, run_generic_review_v3_with_observer,
+    GenericReviewRequestV3, GenericReviewRequestV4, run_generic_review,
+    run_generic_review_v2_with_observer, run_generic_review_v3_with_observer,
     run_generic_review_v4_with_observer,
 };
+use reviewgraphen_runtime::generic_v5::typescript_enumerate_and_defer_artifacts;
 #[cfg(unix)]
 use rustix::fs::{self, FileType, Mode, OFlags};
 use serde_json::{Value, json};
@@ -28,9 +30,12 @@ use std::{
     time::Instant,
 };
 
+mod artifact_root;
+
 const MAX_INPUT_BYTES: u64 = 128 * 1024 * 1024;
 const V3_URI: &str = "https://capht.tech/schemas/reviewgraphen/review-report.v3.schema.json";
 const V4_URI: &str = "https://capht.tech/schemas/reviewgraphen/review-report.v4.schema.json";
+const GENERIC_REVIEW_REQUEST_V5_SCHEMA: &str = "reviewgraphen.generic_review_request.v5";
 
 pub struct CommandOutcome {
     pub exit_code: u8,
@@ -356,6 +361,12 @@ fn generic_review_with_observer(
         Some(GENERIC_REVIEW_REQUEST_V4_SCHEMA) => {
             generic_review_v4(&bytes, value, artifact_root, observer)
         }
+        Some(GENERIC_REVIEW_REQUEST_V5_SCHEMA) => {
+            generic_review_v5(&bytes, value, artifact_root, observer)
+        }
+        Some(reviewgraphen_ingest::source_graph::SOURCE_REVIEW_REQUEST_V6_SCHEMA) => {
+            source_review_v6(&bytes, artifact_root, observer)
+        }
         _ => {
             let request: GenericReviewRequest = match serde_json::from_value(value) {
                 Ok(request) => request,
@@ -370,6 +381,202 @@ fn generic_review_with_observer(
             }
         }
     }
+}
+
+fn generic_review_v5(
+    request_bytes: &[u8],
+    request_value: Value,
+    artifact_argument: &Path,
+    observer: &mut dyn GenericReviewStageObserver,
+) -> CommandOutcome {
+    let cwd = match canonical_invocation_root() {
+        Ok(path) => path,
+        Err(error) => return CommandOutcome::failure(3, error),
+    };
+    if !v5_request_is_valid(&request_value) || !uses_dot_admission_roots(&request_value) {
+        return CommandOutcome::failure(3, "invalid generic review v5 request");
+    }
+    // v5 publishes only the TypeScript r2 arm; every other arm is refused.
+    // Kotlin is reviewed through source review v6 (ADR 0053).
+    if !is_current_typescript_v5_request(&request_value) {
+        return CommandOutcome::failure(3, "invalid generic review v5 request");
+    }
+    let artifact_root = match resolve_artifact_root(&cwd, artifact_argument) {
+        Ok(path) => path,
+        Err(error) => return CommandOutcome::failure(20, error),
+    };
+    if let Err(error) = require_absent_artifact_root(&artifact_root) {
+        return CommandOutcome::failure(20, error);
+    }
+    let Some(base_revision) = request_value.get("base_revision").and_then(Value::as_str) else {
+        return CommandOutcome::failure(3, "invalid generic review v5 request");
+    };
+    let Some(target_revision) = request_value.get("target_revision").and_then(Value::as_str) else {
+        return CommandOutcome::failure(3, "invalid generic review v5 request");
+    };
+    let Some(ingest) = request_value.get("ingest") else {
+        return CommandOutcome::failure(3, "invalid generic review v5 request");
+    };
+    let limits = ["max_files", "max_file_bytes", "max_total_source_bytes"]
+        .into_iter()
+        .map(|field| {
+            ingest
+                .get(field)
+                .and_then(Value::as_u64)
+                .and_then(|value| usize::try_from(value).ok())
+        })
+        .collect::<Option<Vec<_>>>();
+    let Some(limits) = limits else {
+        return CommandOutcome::failure(3, "invalid generic review v5 request");
+    };
+    observer.observe(GenericReviewStageEvent::Begin(GenericReviewStage::Ingest));
+    let product = match typescript_enumerate_and_defer_artifacts(
+        &cwd,
+        &cwd,
+        base_revision,
+        target_revision,
+        limits[0],
+        limits[1],
+        limits[2],
+        request_bytes,
+    ) {
+        Ok(product) => {
+            observer.observe(GenericReviewStageEvent::Completed(
+                GenericReviewStage::Ingest,
+            ));
+            product
+        }
+        Err(error) => {
+            observer.observe(GenericReviewStageEvent::Failed(GenericReviewStage::Ingest));
+            return CommandOutcome::failure(20, error);
+        }
+    };
+    let admitted = match AdmittedRoot::admit(&cwd, artifact_argument, &artifact_root) {
+        Ok(admitted) => admitted,
+        Err(error) => return CommandOutcome::failure(20, error.message()),
+    };
+    observer.observe(GenericReviewStageEvent::Begin(GenericReviewStage::Report));
+    let mut artifacts = BTreeMap::new();
+    artifacts.insert(
+        "extraction-report.v2.json".to_owned(),
+        ("extraction".to_owned(), product.extraction),
+    );
+    artifacts.insert(
+        "ingestion-report.v3.json".to_owned(),
+        ("ingestion".to_owned(), product.ingestion),
+    );
+    artifacts.insert(
+        "audit.run.v5.json".to_owned(),
+        ("audit".to_owned(), product.audit.clone()),
+    );
+    artifacts.insert(
+        "human-report.manifest.v4.json".to_owned(),
+        ("human_report_manifest".to_owned(), product.human_manifest),
+    );
+    artifacts.insert(
+        "human-report.md".to_owned(),
+        ("human_report_markdown".to_owned(), product.human_markdown),
+    );
+    let manifest = artifact_manifest(
+        request_bytes,
+        &product.request_id,
+        &product.run_id,
+        &product.snapshot_id,
+        &product.universe_id,
+        &artifacts,
+    );
+    let manifest_bytes = match canonical_json(&manifest) {
+        Ok(bytes) => bytes,
+        Err(error) => return CommandOutcome::failure(20, error.to_string()),
+    };
+    observer.observe(GenericReviewStageEvent::Completed(
+        GenericReviewStage::Report,
+    ));
+    observer.observe(GenericReviewStageEvent::Begin(
+        GenericReviewStage::ArtifactWrite,
+    ));
+    if let Err(error) =
+        admitted.write_or_unwind(&artifact_write_plan(&artifacts, &manifest_bytes, false))
+    {
+        observer.observe(GenericReviewStageEvent::Failed(
+            GenericReviewStage::ArtifactWrite,
+        ));
+        return CommandOutcome::failure(20, error.message());
+    }
+    observer.observe(GenericReviewStageEvent::Completed(
+        GenericReviewStage::ArtifactWrite,
+    ));
+    CommandOutcome::success(product.audit, String::new())
+}
+
+/// Source review v6 (ADR 0053): one change-driven obligation run for Rust,
+/// TypeScript or Kotlin. The run is computed before the artifact root is
+/// admitted, then written through the same descriptor-relative writer as
+/// every other route; stdout carries the same bytes.
+fn source_review_v6(
+    request_bytes: &[u8],
+    artifact_argument: &Path,
+    observer: &mut dyn GenericReviewStageObserver,
+) -> CommandOutcome {
+    use reviewgraphen_ingest::source_graph;
+    let cwd = match canonical_invocation_root() {
+        Ok(path) => path,
+        Err(error) => return CommandOutcome::failure(3, error),
+    };
+    observer.observe(GenericReviewStageEvent::Begin(GenericReviewStage::Ingest));
+    let run = match source_graph::review(&cwd, request_bytes) {
+        Ok(run) => {
+            observer.observe(GenericReviewStageEvent::Completed(
+                GenericReviewStage::Ingest,
+            ));
+            run
+        }
+        Err(error) => {
+            observer.observe(GenericReviewStageEvent::Failed(GenericReviewStage::Ingest));
+            if error.is_request_refusal() {
+                return CommandOutcome::failure(3, error.to_string());
+            }
+            return CommandOutcome::failure(20, error.to_string());
+        }
+    };
+    let artifact_root = match resolve_artifact_root(&cwd, artifact_argument) {
+        Ok(path) => path,
+        Err(error) => return CommandOutcome::failure(20, error),
+    };
+    if let Err(error) = require_absent_artifact_root(&artifact_root) {
+        return CommandOutcome::failure(20, error);
+    }
+    observer.observe(GenericReviewStageEvent::Begin(
+        GenericReviewStage::ArtifactWrite,
+    ));
+    let admitted = match AdmittedRoot::admit(&cwd, artifact_argument, &artifact_root) {
+        Ok(admitted) => admitted,
+        Err(error) => {
+            observer.observe(GenericReviewStageEvent::Failed(
+                GenericReviewStage::ArtifactWrite,
+            ));
+            return CommandOutcome::failure(20, error.message());
+        }
+    };
+    let plan = WritePlan {
+        records: false,
+        files: vec![PlannedFile {
+            path: source_graph::SOURCE_REVIEW_RUN_V1_FILE,
+            bytes: &run,
+            error: "unable to write source review artifact",
+        }],
+        post_admission_hook: false,
+    };
+    if let Err(error) = admitted.write_or_unwind(&plan) {
+        observer.observe(GenericReviewStageEvent::Failed(
+            GenericReviewStage::ArtifactWrite,
+        ));
+        return CommandOutcome::failure(20, error.message());
+    }
+    observer.observe(GenericReviewStageEvent::Completed(
+        GenericReviewStage::ArtifactWrite,
+    ));
+    CommandOutcome::success(run, String::new())
 }
 
 fn generic_review_v4(
@@ -415,9 +622,6 @@ fn generic_review_v4(
         Ok(run) => run,
         Err(error) => return CommandOutcome::failure(20, error.to_string()),
     };
-    if let Err(error) = admit_fresh_generic_review_artifact_root_v2(&artifact_root) {
-        return CommandOutcome::failure(20, error.to_string());
-    }
     observer.observe(GenericReviewStageEvent::Begin(GenericReviewStage::Report));
     let audit_bytes = match run.canonical_bytes() {
         Ok(bytes) => bytes,
@@ -433,6 +637,11 @@ fn generic_review_v4(
             return CommandOutcome::failure(20, error.to_string());
         }
     };
+    #[cfg(test)]
+    if let Some(message) = g7_r1_seam::report_stage_fault() {
+        observer.observe(GenericReviewStageEvent::Failed(GenericReviewStage::Report));
+        return CommandOutcome::failure(20, message);
+    }
     observer.observe(GenericReviewStageEvent::Completed(
         GenericReviewStage::Report,
     ));
@@ -482,11 +691,24 @@ fn generic_review_v4(
     observer.observe(GenericReviewStageEvent::Begin(
         GenericReviewStage::ArtifactWrite,
     ));
-    if let Err(error) = write_artifacts(&artifact_root, &artifacts, &manifest_bytes) {
+    // G7-R1: the fresh root is admitted only here, after the run, the report
+    // and the manifest exist, so a refusal before this point leaves nothing.
+    let admitted = match AdmittedRoot::admit(&cwd, artifact_argument, &artifact_root) {
+        Ok(admitted) => admitted,
+        Err(error) => {
+            observer.observe(GenericReviewStageEvent::Failed(
+                GenericReviewStage::ArtifactWrite,
+            ));
+            return CommandOutcome::failure(20, error.message());
+        }
+    };
+    if let Err(error) =
+        admitted.write_or_unwind(&artifact_write_plan(&artifacts, &manifest_bytes, true))
+    {
         observer.observe(GenericReviewStageEvent::Failed(
             GenericReviewStage::ArtifactWrite,
         ));
-        return CommandOutcome::failure(20, error);
+        return CommandOutcome::failure(20, error.message());
     }
     observer.observe(GenericReviewStageEvent::Completed(
         GenericReviewStage::ArtifactWrite,
@@ -537,9 +759,6 @@ fn generic_review_v3(
         Ok(run) => run,
         Err(error) => return CommandOutcome::failure(20, error.to_string()),
     };
-    if let Err(error) = admit_fresh_generic_review_artifact_root_v2(&artifact_root) {
-        return CommandOutcome::failure(20, error.to_string());
-    }
     observer.observe(GenericReviewStageEvent::Begin(GenericReviewStage::Report));
     let audit_bytes = match run.canonical_bytes() {
         Ok(bytes) => bytes,
@@ -555,6 +774,11 @@ fn generic_review_v3(
             return CommandOutcome::failure(20, error.to_string());
         }
     };
+    #[cfg(test)]
+    if let Some(message) = g7_r1_seam::report_stage_fault() {
+        observer.observe(GenericReviewStageEvent::Failed(GenericReviewStage::Report));
+        return CommandOutcome::failure(20, message);
+    }
     observer.observe(GenericReviewStageEvent::Completed(
         GenericReviewStage::Report,
     ));
@@ -624,11 +848,24 @@ fn generic_review_v3(
     observer.observe(GenericReviewStageEvent::Begin(
         GenericReviewStage::ArtifactWrite,
     ));
-    if let Err(error) = write_artifacts(&artifact_root, &artifacts, &manifest_bytes) {
+    // G7-R1: the fresh root is admitted only here, after the run, the report
+    // and the manifest exist, so a refusal before this point leaves nothing.
+    let admitted = match AdmittedRoot::admit(&cwd, artifact_argument, &artifact_root) {
+        Ok(admitted) => admitted,
+        Err(error) => {
+            observer.observe(GenericReviewStageEvent::Failed(
+                GenericReviewStage::ArtifactWrite,
+            ));
+            return CommandOutcome::failure(20, error.message());
+        }
+    };
+    if let Err(error) =
+        admitted.write_or_unwind(&artifact_write_plan(&artifacts, &manifest_bytes, true))
+    {
         observer.observe(GenericReviewStageEvent::Failed(
             GenericReviewStage::ArtifactWrite,
         ));
-        return CommandOutcome::failure(20, error);
+        return CommandOutcome::failure(20, error.message());
     }
     observer.observe(GenericReviewStageEvent::Completed(
         GenericReviewStage::ArtifactWrite,
@@ -679,9 +916,6 @@ fn generic_review_v2(
         Ok(run) => run,
         Err(error) => return CommandOutcome::failure(20, error.to_string()),
     };
-    if let Err(error) = admit_fresh_generic_review_artifact_root_v2(&artifact_root) {
-        return CommandOutcome::failure(20, error.to_string());
-    }
     observer.observe(GenericReviewStageEvent::Begin(GenericReviewStage::Report));
     let audit_bytes = match run.canonical_bytes() {
         Ok(bytes) => bytes,
@@ -697,6 +931,11 @@ fn generic_review_v2(
             return CommandOutcome::failure(20, error.to_string());
         }
     };
+    #[cfg(test)]
+    if let Some(message) = g7_r1_seam::report_stage_fault() {
+        observer.observe(GenericReviewStageEvent::Failed(GenericReviewStage::Report));
+        return CommandOutcome::failure(20, message);
+    }
     observer.observe(GenericReviewStageEvent::Completed(
         GenericReviewStage::Report,
     ));
@@ -754,11 +993,24 @@ fn generic_review_v2(
     observer.observe(GenericReviewStageEvent::Begin(
         GenericReviewStage::ArtifactWrite,
     ));
-    if let Err(error) = write_artifacts(&artifact_root, &artifacts, &manifest_bytes) {
+    // G7-R1: the fresh root is admitted only here, after the run, the report
+    // and the manifest exist, so a refusal before this point leaves nothing.
+    let admitted = match AdmittedRoot::admit(&cwd, artifact_argument, &artifact_root) {
+        Ok(admitted) => admitted,
+        Err(error) => {
+            observer.observe(GenericReviewStageEvent::Failed(
+                GenericReviewStage::ArtifactWrite,
+            ));
+            return CommandOutcome::failure(20, error.message());
+        }
+    };
+    if let Err(error) =
+        admitted.write_or_unwind(&artifact_write_plan(&artifacts, &manifest_bytes, true))
+    {
         observer.observe(GenericReviewStageEvent::Failed(
             GenericReviewStage::ArtifactWrite,
         ));
-        return CommandOutcome::failure(20, error);
+        return CommandOutcome::failure(20, error.message());
     }
     observer.observe(GenericReviewStageEvent::Completed(
         GenericReviewStage::ArtifactWrite,
@@ -826,6 +1078,38 @@ fn v4_request_is_valid(value: &Value) -> bool {
     jsonschema::validator_for(&schema).is_ok_and(|validator| validator.is_valid(value))
 }
 
+fn v5_request_is_valid(value: &Value) -> bool {
+    let Ok(schema) = serde_json::from_str::<Value>(include_str!(
+        "../../../schemas/reviewgraphen.generic_review_request.v5.schema.json"
+    )) else {
+        return false;
+    };
+    jsonschema::validator_for(&schema).is_ok_and(|validator| validator.is_valid(value))
+}
+
+fn is_current_typescript_v5_request(value: &Value) -> bool {
+    let binding = reviewgraphen_core::source_review::registry::typescript_registry_binding();
+    let Some(ingest) = value.get("ingest") else {
+        return false;
+    };
+    value.get("registry_id").and_then(Value::as_str) == Some(binding.registry_id.as_str())
+        && value.get("registry_hash").and_then(Value::as_str)
+            == Some(binding.registry_hash.as_str())
+        && value.get("projection_id").and_then(Value::as_str)
+            == Some(binding.tuple.projection_id.as_str())
+        && ingest.get("profile_id").and_then(Value::as_str)
+            == Some(binding.tuple.profile_id.as_str())
+        && ingest.get("profile_version").and_then(Value::as_str)
+            == Some(binding.tuple.profile_version.as_str())
+        && ingest.get("language").and_then(Value::as_str) == Some(binding.tuple.language.as_str())
+        && ingest.get("producer_id").and_then(Value::as_str)
+            == Some(binding.tuple.producer_id.as_str())
+        && ingest.get("extractor_set_hash").and_then(Value::as_str)
+            == Some(binding.tuple.extractor_set_hash.as_str())
+        && ingest.get("rule_set_hash").and_then(Value::as_str)
+            == Some(binding.tuple.rule_set_hash.as_str())
+}
+
 fn uses_dot_admission_roots(value: &Value) -> bool {
     matches!(
         value
@@ -870,19 +1154,31 @@ fn artifact_manifest(
     })
 }
 
-fn write_artifacts(
-    root: &Path,
-    artifacts: &BTreeMap<String, (String, Vec<u8>)>,
-    manifest_bytes: &[u8],
-) -> Result<(), &'static str> {
-    let records = root.join("records");
-    stdfs::create_dir(&records).map_err(|_| "unable to create generic review records")?;
-    for (path, (_, bytes)) in artifacts {
-        let destination = root.join(path);
-        stdfs::write(destination, bytes).map_err(|_| "unable to write generic review artifact")?;
+/// The v2–v4 and TS v5 publication order: `records/` first when a path
+/// nests, the artifacts in path order, the artifact manifest last.
+fn artifact_write_plan<'a>(
+    artifacts: &'a BTreeMap<String, (String, Vec<u8>)>,
+    manifest_bytes: &'a [u8],
+    post_admission_hook: bool,
+) -> WritePlan<'a> {
+    let mut files = artifacts
+        .iter()
+        .map(|(path, (_, bytes))| PlannedFile {
+            path,
+            bytes,
+            error: "unable to write generic review artifact",
+        })
+        .collect::<Vec<_>>();
+    files.push(PlannedFile {
+        path: "artifact-manifest.v1.json",
+        bytes: manifest_bytes,
+        error: "unable to write generic review artifact manifest",
+    });
+    WritePlan {
+        records: artifacts.keys().any(|path| path.contains('/')),
+        files,
+        post_admission_hook,
     }
-    stdfs::write(root.join("artifact-manifest.v1.json"), manifest_bytes)
-        .map_err(|_| "unable to write generic review artifact manifest")
 }
 
 fn schema_list() -> CommandOutcome {
@@ -907,7 +1203,13 @@ fn schema_list() -> CommandOutcome {
         "reviewgraphen.generic_review_run.v4",
         "reviewgraphen.generic_review_human_report.v3",
         "reviewgraphen.generic_review_diagnostics.v1",
-        "reviewgraphen.responsibility_family_state.v1"
+        "reviewgraphen.responsibility_family_state.v1",
+        "reviewgraphen.generic_review_request.v5",
+        "reviewgraphen.extraction_report.v2",
+        "reviewgraphen.ingestion_report.v3",
+        "reviewgraphen.generic_review_run.v5",
+        "reviewgraphen.generic_review_human_report.v4",
+        "reviewgraphen.generic_review_artifact_manifest.v1"
     ]);
     CommandOutcome::success(canonical_json(&values).unwrap_or_default(), String::new())
 }
@@ -932,6 +1234,16 @@ fn schema_validate(path: &Path) -> CommandOutcome {
         Some(name) => name,
         None => return validation_failure("missing_schema"),
     };
+    if schema_name != ARTIFACT_MANIFEST_V1_SCHEMA
+        && schema_name.starts_with(ARTIFACT_MANIFEST_FAMILY_PREFIX)
+    {
+        // C09 owns the whole manifest family: an unknown manifest version is
+        // an invalid manifest, never a fallback to another version.
+        return validation_failure("schema_invalid");
+    }
+    if STRICT_WIRE_SCHEMAS.contains(&schema_name) && !strict_wire_json(&bytes) {
+        return validation_failure("schema_invalid");
+    }
     if !semantic_validation_available(schema_name) {
         return validation_failure("unsupported_platform");
     }
@@ -1018,8 +1330,211 @@ fn semantic_validation(name: &str, report: &Value) -> Result<(), ()> {
                 serde_json::from_value(report.clone()).map_err(|_| ())?;
             state.validate().map_err(|_| ())
         }
+        // Existing TypeScript v5 families are registered from unchanged bytes
+        // and keep their existing structural-only validation.
+        "reviewgraphen.generic_review_request.v5"
+        | "reviewgraphen.extraction_report.v2"
+        | "reviewgraphen.ingestion_report.v3"
+        | "reviewgraphen.generic_review_run.v5"
+        | "reviewgraphen.generic_review_human_report.v4" => Ok(()),
+        ARTIFACT_MANIFEST_V1_SCHEMA => validate_artifact_manifest_v1(report),
         _ => Ok(()),
     }
+}
+
+const ARTIFACT_MANIFEST_V1_SCHEMA: &str = "reviewgraphen.generic_review_artifact_manifest.v1";
+const ARTIFACT_MANIFEST_FAMILY_PREFIX: &str = "reviewgraphen.generic_review_artifact_manifest.";
+
+/// Families whose raw bytes must have unique object keys and canonical
+/// unsigned-integer number lexemes before any lossy JSON decoding.
+const STRICT_WIRE_SCHEMAS: [&str; 1] = [ARTIFACT_MANIFEST_V1_SCHEMA];
+
+const V5_TYPESCRIPT_MANIFEST_ROWS: [(&str, &str); 5] = [
+    ("audit.run.v5.json", "audit"),
+    ("extraction-report.v2.json", "extraction"),
+    ("human-report.manifest.v4.json", "human_report_manifest"),
+    ("human-report.md", "human_report_markdown"),
+    ("ingestion-report.v3.json", "ingestion"),
+];
+const V4_MANIFEST_ROWS: [(&str, &str); 3] = [
+    ("audit.run.v4.json", "audit"),
+    ("human-report.manifest.v3.json", "human_report_manifest"),
+    ("human-report.md", "human_report_markdown"),
+];
+const V3_MANIFEST_ROWS: [(&str, &str); 3] = [
+    ("audit.run.v3.json", "audit"),
+    ("human-report.manifest.v2.json", "human_report_manifest"),
+    ("human-report.md", "human_report_markdown"),
+];
+const V2_MANIFEST_ROWS: [(&str, &str); 3] = [
+    ("audit.run.v2.json", "audit"),
+    ("human-report.manifest.v1.json", "human_report_manifest"),
+    ("human-report.md", "human_report_markdown"),
+];
+const PACKET_SUFFIX: &str = ".provider-free-reviewer-packet.v1.json";
+const OBSERVER_SUFFIX: &str = ".deterministic-observer-output.v1.json";
+
+/// C09 wire check of a structurally valid artifact manifest v1: strictly
+/// sorted safe rows, no self row, one supported bundle family, and exactly
+/// paired v2/v3 execution records. Referenced bytes are not available here,
+/// so no file length/hash/request/Git check is claimed.
+fn validate_artifact_manifest_v1(manifest: &Value) -> Result<(), ()> {
+    let mut main = Vec::new();
+    let mut records: BTreeMap<&str, [bool; 2]> = BTreeMap::new();
+    let mut previous: Option<&str> = None;
+    for row in manifest["artifacts"].as_array().ok_or(())? {
+        let path = row["path"].as_str().ok_or(())?;
+        let role = row["role"].as_str().ok_or(())?;
+        if previous.is_some_and(|previous| previous >= path)
+            || path
+                .split('/')
+                .any(|segment| matches!(segment, "" | "." | ".."))
+            || path == "artifact-manifest.v1.json"
+        {
+            return Err(());
+        }
+        previous = Some(path);
+        let Some(record) = path.strip_prefix("records/") else {
+            main.push((path, role));
+            continue;
+        };
+        let (execution, slot) = match (
+            record.strip_suffix(PACKET_SUFFIX),
+            record.strip_suffix(OBSERVER_SUFFIX),
+            role,
+        ) {
+            (Some(execution), None, "reviewer_packet") => (execution, 0),
+            (None, Some(execution), "deterministic_observer_output") => (execution, 1),
+            _ => return Err(()),
+        };
+        if execution.len() != 64
+            || !execution
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            return Err(());
+        }
+        records.entry(execution).or_default()[slot] = true;
+    }
+    let records_allowed = if main == V5_TYPESCRIPT_MANIFEST_ROWS || main == V4_MANIFEST_ROWS {
+        false
+    } else if main == V3_MANIFEST_ROWS || main == V2_MANIFEST_ROWS {
+        true
+    } else {
+        return Err(());
+    };
+    if (!records_allowed && !records.is_empty())
+        || records.values().any(|pair| *pair != [true, true])
+    {
+        return Err(());
+    }
+    Ok(())
+}
+
+/// Scans already-parsed JSON bytes, rejecting a duplicate key in any object
+/// (compared after unescaping) and any number lexeme other than a canonical
+/// unsigned decimal integer.
+fn strict_wire_json(bytes: &[u8]) -> bool {
+    let mut position = 0;
+    strict_value(bytes, &mut position).is_some() && skip_whitespace(bytes, position) == bytes.len()
+}
+
+fn skip_whitespace(bytes: &[u8], mut position: usize) -> usize {
+    while bytes
+        .get(position)
+        .is_some_and(|byte| matches!(byte, b' ' | b'\t' | b'\n' | b'\r'))
+    {
+        position += 1;
+    }
+    position
+}
+
+fn strict_value(bytes: &[u8], position: &mut usize) -> Option<()> {
+    *position = skip_whitespace(bytes, *position);
+    match *bytes.get(*position)? {
+        b'{' => {
+            *position += 1;
+            let mut keys = std::collections::BTreeSet::new();
+            loop {
+                *position = skip_whitespace(bytes, *position);
+                match *bytes.get(*position)? {
+                    b'}' if keys.is_empty() => break,
+                    b'"' => {}
+                    _ => return None,
+                }
+                let key = strict_string(bytes, position)?;
+                if !keys.insert(key) {
+                    return None;
+                }
+                *position = skip_whitespace(bytes, *position);
+                (*bytes.get(*position)? == b':').then_some(())?;
+                *position += 1;
+                strict_value(bytes, position)?;
+                *position = skip_whitespace(bytes, *position);
+                match *bytes.get(*position)? {
+                    b',' => *position += 1,
+                    b'}' => break,
+                    _ => return None,
+                }
+            }
+            *position += 1;
+        }
+        b'[' => {
+            *position += 1;
+            if *bytes.get(skip_whitespace(bytes, *position))? == b']' {
+                *position = skip_whitespace(bytes, *position) + 1;
+                return Some(());
+            }
+            loop {
+                strict_value(bytes, position)?;
+                *position = skip_whitespace(bytes, *position);
+                match *bytes.get(*position)? {
+                    b',' => *position += 1,
+                    b']' => break,
+                    _ => return None,
+                }
+            }
+            *position += 1;
+        }
+        b'"' => {
+            strict_string(bytes, position)?;
+        }
+        b'0'..=b'9' | b'-' => {
+            let start = *position;
+            while bytes
+                .get(*position)
+                .is_some_and(|byte| matches!(byte, b'0'..=b'9' | b'-' | b'+' | b'.' | b'e' | b'E'))
+            {
+                *position += 1;
+            }
+            let lexeme = &bytes[start..*position];
+            let canonical =
+                lexeme == b"0" || (lexeme[0] != b'0' && lexeme.iter().all(u8::is_ascii_digit));
+            canonical.then_some(())?;
+        }
+        _ => {
+            let start = *position;
+            while bytes.get(*position).is_some_and(u8::is_ascii_lowercase) {
+                *position += 1;
+            }
+            matches!(&bytes[start..*position], b"true" | b"false" | b"null").then_some(())?;
+        }
+    }
+    Some(())
+}
+
+fn strict_string(bytes: &[u8], position: &mut usize) -> Option<String> {
+    let start = *position;
+    *position += 1;
+    loop {
+        match *bytes.get(*position)? {
+            b'\\' => *position += 2,
+            b'"' => break,
+            _ => *position += 1,
+        }
+    }
+    *position += 1;
+    serde_json::from_slice(&bytes[start..*position]).ok()
 }
 
 fn semantic_validation_available(name: &str) -> bool {
@@ -1140,6 +1655,24 @@ fn schema_source(name: &str) -> Option<&'static str> {
         "reviewgraphen.responsibility_family_state.v1" => Some(include_str!(
             "../../../schemas/reviewgraphen.responsibility_family_state.v1.schema.json"
         )),
+        "reviewgraphen.generic_review_request.v5" => Some(include_str!(
+            "../../../schemas/reviewgraphen.generic_review_request.v5.schema.json"
+        )),
+        "reviewgraphen.extraction_report.v2" => Some(include_str!(
+            "../../../schemas/reviewgraphen.extraction_report.v2.schema.json"
+        )),
+        "reviewgraphen.ingestion_report.v3" => Some(include_str!(
+            "../../../schemas/reviewgraphen.ingestion_report.v3.schema.json"
+        )),
+        "reviewgraphen.generic_review_run.v5" => Some(include_str!(
+            "../../../schemas/reviewgraphen.generic_review_run.v5.schema.json"
+        )),
+        "reviewgraphen.generic_review_human_report.v4" => Some(include_str!(
+            "../../../schemas/reviewgraphen.generic_review_human_report.v4.schema.json"
+        )),
+        "reviewgraphen.generic_review_artifact_manifest.v1" => Some(include_str!(
+            "../../../schemas/reviewgraphen.generic_review_artifact_manifest.v1.schema.json"
+        )),
         _ => None,
     }
 }
@@ -1222,7 +1755,13 @@ mod tests {
                 "reviewgraphen.generic_review_run.v4",
                 "reviewgraphen.generic_review_human_report.v3",
                 "reviewgraphen.generic_review_diagnostics.v1",
-                "reviewgraphen.responsibility_family_state.v1"
+                "reviewgraphen.responsibility_family_state.v1",
+                "reviewgraphen.generic_review_request.v5",
+                "reviewgraphen.extraction_report.v2",
+                "reviewgraphen.ingestion_report.v3",
+                "reviewgraphen.generic_review_run.v5",
+                "reviewgraphen.generic_review_human_report.v4",
+                "reviewgraphen.generic_review_artifact_manifest.v1"
             ])
         );
         let printed = run(vec![
@@ -1323,5 +1862,319 @@ mod tests {
             assert!(rejected.stdout.is_empty());
             assert_eq!(rejected.stderr, baseline.stderr);
         }
+    }
+}
+
+#[cfg(test)]
+mod g7_r1_sup1_acceptance;
+
+#[cfg(all(test, target_os = "linux"))]
+mod t1_fixtures;
+
+// T1 acceptance checks Linux descriptor semantics and /proc umask reads, and
+// changes the process cwd (safe under nextest's per-test processes).
+#[cfg(all(test, target_os = "linux"))]
+mod t1_toctou_acceptance;
+
+#[cfg(all(test, target_os = "linux"))]
+mod t1r2_foreign_root_acceptance;
+
+#[cfg(all(test, target_os = "linux"))]
+mod t1s2_descriptor_mechanics_acceptance;
+
+#[cfg(all(test, target_os = "linux"))]
+mod t1s3_rereview_acceptance;
+
+#[cfg(all(test, target_os = "linux"))]
+mod t1s3b_unwind_unlink_acceptance;
+
+/// T1 test seam (thread-local, unset by guard drop, identity when unset,
+/// absent from non-test builds): a hook fired with the artifact-root pathname
+/// between the last admission check and `mkdirat` (`BeforeRootCreate`) and
+/// after the root was created and verified, before its first entry
+/// (`AfterRootCreate`), on v2, v3, v4, TS v5 and Kotlin v5.
+#[cfg(test)]
+pub(crate) mod t1_seam {
+    use std::{cell::RefCell, path::Path};
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub(crate) enum SwapPoint {
+        BeforeRootCreate,
+        AfterRootCreate,
+    }
+
+    type SwapHook = Box<dyn FnMut(SwapPoint, &Path)>;
+
+    thread_local! {
+        static SWAP_HOOK: RefCell<Option<SwapHook>> = RefCell::new(None);
+    }
+
+    pub(crate) struct SwapHookGuard;
+
+    impl Drop for SwapHookGuard {
+        fn drop(&mut self) {
+            SWAP_HOOK.with(|hook| hook.borrow_mut().take());
+        }
+    }
+
+    pub(crate) fn install_swap_hook(hook: SwapHook) -> impl Drop {
+        SWAP_HOOK.with(|slot| *slot.borrow_mut() = Some(hook));
+        SwapHookGuard
+    }
+
+    pub(crate) fn fire(point: SwapPoint, root: &Path) {
+        SWAP_HOOK.with(|slot| {
+            if let Some(hook) = slot.borrow_mut().as_mut() {
+                hook(point, root);
+            }
+        });
+    }
+}
+
+/// T1-R2 test seam (thread-local, unset by guard drop, identity when unset,
+/// absent from non-test builds): a hook fired immediately after each
+/// successful `mkdirat` of a directory this call creates (the artifact root,
+/// `records/`), before any stat, open or freshness check of it.
+#[cfg(test)]
+pub(crate) mod t1r2_seam {
+    use std::{cell::RefCell, path::Path};
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub(crate) enum CreatedDirectory {
+        Root,
+        Records,
+    }
+
+    type CreatedDirectoryHook = Box<dyn FnMut(CreatedDirectory, &Path)>;
+
+    thread_local! {
+        static CREATED_DIRECTORY_HOOK: RefCell<Option<CreatedDirectoryHook>> =
+            RefCell::new(None);
+    }
+
+    pub(crate) struct CreatedDirectoryHookGuard;
+
+    impl Drop for CreatedDirectoryHookGuard {
+        fn drop(&mut self) {
+            CREATED_DIRECTORY_HOOK.with(|hook| hook.borrow_mut().take());
+        }
+    }
+
+    pub(crate) fn install_created_directory_hook(hook: CreatedDirectoryHook) -> impl Drop {
+        CREATED_DIRECTORY_HOOK.with(|slot| *slot.borrow_mut() = Some(hook));
+        CreatedDirectoryHookGuard
+    }
+
+    pub(crate) fn fire(created: CreatedDirectory, path: &Path) {
+        CREATED_DIRECTORY_HOOK.with(|slot| {
+            if let Some(hook) = slot.borrow_mut().as_mut() {
+                hook(created, path);
+            }
+        });
+    }
+}
+
+/// T1 SUPPLEMENT-2 test seam (thread-local, unset by guard drop, identity
+/// when unset, absent from non-test builds): descriptor-mechanics points in
+/// `artifact_root.rs` — after each walked parent (`MidWalk`), around the
+/// reopen of the created root (`BeforeReopen` / `AfterReopen`), before each
+/// planned file (`BetweenFiles`), and between the identity check and
+/// `unlinkat` of each created file during unwind (`UnwindBeforeUnlink`).
+#[cfg(test)]
+pub(crate) mod t1s2_seam {
+    use std::{cell::RefCell, path::Path};
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub(crate) enum Point {
+        MidWalk,
+        BeforeReopen,
+        AfterReopen,
+        BetweenFiles { written: usize },
+        UnwindBeforeUnlink,
+    }
+
+    type Hook = Box<dyn FnMut(Point, &Path)>;
+
+    thread_local! {
+        static HOOK: RefCell<Option<Hook>> = RefCell::new(None);
+    }
+
+    pub(crate) struct HookGuard;
+
+    impl Drop for HookGuard {
+        fn drop(&mut self) {
+            HOOK.with(|hook| hook.borrow_mut().take());
+        }
+    }
+
+    pub(crate) fn install_hook(hook: Hook) -> impl Drop {
+        HOOK.with(|slot| *slot.borrow_mut() = Some(hook));
+        HookGuard
+    }
+
+    pub(crate) fn fire(point: Point, path: &Path) {
+        HOOK.with(|slot| {
+            if let Some(hook) = slot.borrow_mut().as_mut() {
+                hook(point, path);
+            }
+        });
+    }
+}
+
+/// T1 SUPPLEMENT-3 test seam (thread-local, unset by guard drop, identity
+/// when unset, absent from non-test builds): force the umask query's
+/// "unavailable" path, count fresh-directory checks that skipped the mode
+/// comparison, and inject an errno into the unwind identity `statat` of one
+/// tracked file (by its root-relative label) or into the unwind `unlinkat`
+/// of one tracked entry.
+#[cfg(test)]
+pub(crate) mod t1s3_seam {
+    use rustix::io::Errno;
+    use std::cell::{Cell, RefCell};
+
+    thread_local! {
+        static UMASK_UNAVAILABLE: Cell<bool> = const { Cell::new(false) };
+        static MODE_CHECK_SKIPS: Cell<usize> = const { Cell::new(0) };
+        static UNWIND_STAT_FAULT: Cell<Option<(&'static str, i32)>> = const { Cell::new(None) };
+        static UNWIND_STAT_FAULTS_INJECTED: Cell<usize> = const { Cell::new(0) };
+        static UNWIND_UNLINK_FAULT: RefCell<Option<(String, i32)>> = const { RefCell::new(None) };
+        static UNWIND_UNLINK_FAULTS_INJECTED: Cell<usize> = const { Cell::new(0) };
+    }
+
+    pub(crate) struct UnwindUnlinkFaultGuard;
+
+    impl Drop for UnwindUnlinkFaultGuard {
+        fn drop(&mut self) {
+            UNWIND_UNLINK_FAULT.with(|fault| fault.borrow_mut().take());
+        }
+    }
+
+    /// While held, the unwind `unlinkat` of the tracked entry whose label
+    /// (`name`, `records/<name>`, `records`, or `""` for the root) equals
+    /// `entry` returns `Err(errno)` instead of removing it.
+    pub(crate) fn install_unwind_unlink_fault(entry: &str, errno: i32) -> impl Drop {
+        UNWIND_UNLINK_FAULT.with(|fault| *fault.borrow_mut() = Some((entry.to_owned(), errno)));
+        UnwindUnlinkFaultGuard
+    }
+
+    pub(crate) fn unwind_unlink_faults_injected() -> usize {
+        UNWIND_UNLINK_FAULTS_INJECTED.with(Cell::get)
+    }
+
+    pub(crate) fn unwind_unlink_fault(label: &str) -> Option<Errno> {
+        let errno = UNWIND_UNLINK_FAULT.with(|fault| {
+            fault
+                .borrow()
+                .as_ref()
+                .filter(|(entry, _)| entry == label)
+                .map(|(_, errno)| *errno)
+        })?;
+        UNWIND_UNLINK_FAULTS_INJECTED.with(|count| count.set(count.get() + 1));
+        Some(Errno::from_raw_os_error(errno))
+    }
+
+    pub(crate) struct UmaskUnavailableGuard;
+
+    impl Drop for UmaskUnavailableGuard {
+        fn drop(&mut self) {
+            UMASK_UNAVAILABLE.with(|flag| flag.set(false));
+        }
+    }
+
+    pub(crate) struct UnwindStatFaultGuard;
+
+    impl Drop for UnwindStatFaultGuard {
+        fn drop(&mut self) {
+            UNWIND_STAT_FAULT.with(|fault| fault.set(None));
+        }
+    }
+
+    pub(crate) fn install_umask_unavailable() -> impl Drop {
+        UMASK_UNAVAILABLE.with(|flag| flag.set(true));
+        UmaskUnavailableGuard
+    }
+
+    pub(crate) fn mode_check_skips() -> usize {
+        MODE_CHECK_SKIPS.with(Cell::get)
+    }
+
+    pub(crate) fn install_unwind_stat_fault(entry: &'static str, errno: i32) -> impl Drop {
+        UNWIND_STAT_FAULT.with(|fault| fault.set(Some((entry, errno))));
+        UnwindStatFaultGuard
+    }
+
+    pub(crate) fn unwind_stat_faults_injected() -> usize {
+        UNWIND_STAT_FAULTS_INJECTED.with(Cell::get)
+    }
+
+    pub(crate) fn umask_forced_unavailable() -> bool {
+        UMASK_UNAVAILABLE.with(Cell::get)
+    }
+
+    pub(crate) fn record_mode_check_skip() {
+        MODE_CHECK_SKIPS.with(|count| count.set(count.get() + 1));
+    }
+
+    pub(crate) fn unwind_stat_fault(label: &str) -> Option<Errno> {
+        let (entry, errno) = UNWIND_STAT_FAULT.with(Cell::get)?;
+        if entry != label {
+            return None;
+        }
+        UNWIND_STAT_FAULTS_INJECTED.with(|count| count.set(count.get() + 1));
+        Some(Errno::from_raw_os_error(errno))
+    }
+}
+
+/// G7-R1 SUPPLEMENT-1 test seams (thread-local, unset by guard drop, identity
+/// when unset, absent from non-test builds): a report-stage fault checked by
+/// v2–v4 right after human-report generation, and a hook called with the
+/// admitted root before the first artifact entry is created.
+#[cfg(test)]
+pub(crate) mod g7_r1_seam {
+    use std::{cell::RefCell, path::Path};
+
+    type PostAdmissionHook = Box<dyn FnMut(&Path)>;
+
+    thread_local! {
+        static REPORT_STAGE_FAULT: RefCell<Option<&'static str>> = const { RefCell::new(None) };
+        static POST_ADMISSION_HOOK: RefCell<Option<PostAdmissionHook>> = RefCell::new(None);
+    }
+
+    pub(crate) struct ReportStageFaultGuard;
+
+    impl Drop for ReportStageFaultGuard {
+        fn drop(&mut self) {
+            REPORT_STAGE_FAULT.with(|fault| fault.borrow_mut().take());
+        }
+    }
+
+    pub(crate) struct PostAdmissionHookGuard;
+
+    impl Drop for PostAdmissionHookGuard {
+        fn drop(&mut self) {
+            POST_ADMISSION_HOOK.with(|hook| hook.borrow_mut().take());
+        }
+    }
+
+    pub(crate) fn install_report_stage_fault(message: &'static str) -> impl Drop {
+        REPORT_STAGE_FAULT.with(|fault| *fault.borrow_mut() = Some(message));
+        ReportStageFaultGuard
+    }
+
+    pub(crate) fn install_post_admission_hook(hook: PostAdmissionHook) -> impl Drop {
+        POST_ADMISSION_HOOK.with(|slot| *slot.borrow_mut() = Some(hook));
+        PostAdmissionHookGuard
+    }
+
+    pub(super) fn report_stage_fault() -> Option<&'static str> {
+        REPORT_STAGE_FAULT.with(|fault| *fault.borrow())
+    }
+
+    pub(crate) fn run_post_admission_hook(root: &Path) {
+        POST_ADMISSION_HOOK.with(|slot| {
+            if let Some(hook) = slot.borrow_mut().as_mut() {
+                hook(root);
+            }
+        });
     }
 }

@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ReviewGraphen source-review profile v2 envelope",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "registry_binding", "profile_id", "profile_version", "language", "definition_hash", "definition"],
+  "properties": {
+    "schema": {"const": "reviewgraphen.review_profile.v2"},
+    "registry_binding": {"$ref": "#/$defs/registry_binding"},
+    "profile_id": {"type": "string", "minLength": 1},
+    "profile_version": {"type": "string", "minLength": 1},
+    "language": {"type": "string", "minLength": 1},
+    "definition_hash": {"$ref": "#/$defs/hash"},
+    "definition": {"type": "object"}
+  },
+  "$defs": {
+    "hash": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "registry_binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["registry_id", "registry_hash", "arm_id", "arm_hash", "tuple_hash"],
+      "properties": {
+        "registry_id": {"type": "string", "minLength": 1},
+        "registry_hash": {"$ref": "#/$defs/hash"},
+        "arm_id": {"type": "string", "minLength": 1},
+        "arm_hash": {"$ref": "#/$defs/hash"},
+        "tuple_hash": {"$ref": "#/$defs/hash"}
+      }
+    }
+  }
+}

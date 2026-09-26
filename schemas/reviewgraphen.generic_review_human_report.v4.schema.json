@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ReviewGraphen source-review human report manifest v4",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "registry_binding", "run_id", "run_hash", "projection_id", "markdown_hash"],
+  "properties": {
+    "schema": {"const": "reviewgraphen.generic_review_human_report.v4"},
+    "registry_binding": {"$ref": "#/$defs/registry_binding"},
+    "run_id": {"type": "string", "minLength": 1},
+    "run_hash": {"$ref": "#/$defs/hash"},
+    "projection_id": {"type": "string", "minLength": 1},
+    "markdown_hash": {"$ref": "#/$defs/hash"}
+  },
+  "$defs": {
+    "hash": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "registry_binding": {"type": "object", "additionalProperties": false, "required": ["registry_id", "registry_hash", "arm_id", "arm_hash", "tuple_hash"], "properties": {"registry_id": {"type": "string"}, "registry_hash": {"$ref": "#/$defs/hash"}, "arm_id": {"type": "string"}, "arm_hash": {"$ref": "#/$defs/hash"}, "tuple_hash": {"$ref": "#/$defs/hash"}}}
+  }
+}

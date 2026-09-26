@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ReviewGraphen TypeScript enumerate-and-defer request v5",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "registry_id", "registry_hash", "workspace_admission_root", "repository_admission_root", "repository_identity", "base_revision", "target_revision", "ingest", "execution_mode", "projection_id"],
+  "properties": {
+    "schema": {"const": "reviewgraphen.generic_review_request.v5"},
+    "registry_id": {"type": "string", "minLength": 1},
+    "registry_hash": {"$ref": "#/$defs/hash"},
+    "workspace_admission_root": {"type": "string", "minLength": 1},
+    "repository_admission_root": {"type": "string", "minLength": 1},
+    "repository_identity": {"type": "string", "minLength": 1},
+    "base_revision": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "target_revision": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "ingest": {"$ref": "#/$defs/ingest"},
+    "execution_mode": {"const": "enumerate_and_defer"},
+    "projection_id": {"type": "string", "minLength": 1}
+  },
+  "$defs": {
+    "hash": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "ingest": {"type": "object", "additionalProperties": false, "required": ["profile_id", "profile_version", "language", "producer_id", "extractor_set_hash", "rule_set_hash", "max_files", "max_file_bytes", "max_total_source_bytes"], "properties": {"profile_id": {"type": "string", "minLength": 1}, "profile_version": {"type": "string", "minLength": 1}, "language": {"type": "string", "minLength": 1}, "producer_id": {"type": "string", "minLength": 1}, "extractor_set_hash": {"$ref": "#/$defs/hash"}, "rule_set_hash": {"$ref": "#/$defs/hash"}, "max_files": {"type": "integer", "minimum": 1}, "max_file_bytes": {"type": "integer", "minimum": 1}, "max_total_source_bytes": {"type": "integer", "minimum": 1}}}
+  }
+}

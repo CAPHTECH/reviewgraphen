@@ -1762,6 +1762,12 @@ impl Entry {
         self.active.store(false, Ordering::SeqCst);
     }
 }
+
+/// A changed public free function with declared-`async` concurrency
+/// evidence, so the legacy node rule has an eligible candidate.
+pub async fn drive(entry: Arc<Entry>, value: u64) {
+    entry.run(value);
+}
 "#;
         let beta = br#"use std::sync::atomic::{AtomicUsize, Ordering};
 

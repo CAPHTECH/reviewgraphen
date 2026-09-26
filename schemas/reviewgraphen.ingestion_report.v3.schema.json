@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ReviewGraphen source-review ingestion report v3 envelope",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "registry_binding", "snapshot_binding", "extraction_binding", "d_pairs", "d_partition"],
+  "properties": {
+    "schema": {"const": "reviewgraphen.ingestion_report.v3"},
+    "registry_binding": {"$ref": "#/$defs/registry_binding"},
+    "snapshot_binding": {"type": "object"},
+    "extraction_binding": {"$ref": "#/$defs/artifact_binding"},
+    "d_pairs": {"type": "array", "items": {"$ref": "#/$defs/d_pair"}},
+    "d_partition": {"type": "object"}
+  },
+  "$defs": {
+    "hash": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "registry_binding": {"type": "object", "additionalProperties": false, "required": ["registry_id", "registry_hash", "arm_id", "arm_hash", "tuple_hash"], "properties": {"registry_id": {"type": "string"}, "registry_hash": {"$ref": "#/$defs/hash"}, "arm_id": {"type": "string"}, "arm_hash": {"$ref": "#/$defs/hash"}, "tuple_hash": {"$ref": "#/$defs/hash"}}},
+    "artifact_binding": {"type": "object", "additionalProperties": false, "required": ["artifact_hash", "registry_binding"], "properties": {"artifact_hash": {"$ref": "#/$defs/hash"}, "registry_binding": {"$ref": "#/$defs/registry_binding"}}},
+    "d_pair": {"type": "object", "additionalProperties": false, "required": ["key", "caller_id", "callee_id", "resolution_kinds", "callsite_keys", "eligibility", "reason_ids", "change_witness_refs", "visibility_witness_refs"], "properties": {"key": {"type": "string"}, "caller_id": {"type": "string"}, "callee_id": {"type": "string"}, "resolution_kinds": {"type": "array", "items": {"type": "string"}}, "callsite_keys": {"type": "array", "items": {"type": "string"}}, "eligibility": {"enum": ["eligible", "ineligible"]}, "reason_ids": {"type": "array", "items": {"type": "string"}}, "change_witness_refs": {"type": "array", "items": {"type": "string"}}, "visibility_witness_refs": {"type": "array", "items": {"type": "string"}}}}
+  }
+}

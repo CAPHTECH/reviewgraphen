@@ -3114,74 +3114,251 @@ fn m2_output_feeds_m1_synthesis_without_a_migration_gap() {
         bundle.universe().snapshot_id(),
         result.program_space.snapshot_id()
     );
+
+    // `fixture_repository` changes only a synchronous public worker. It has
+    // no local-concurrency node trigger, no unbounded-reentry relation, no
+    // idempotency-key-missing call to an external effect, and consequently no
+    // derived payment path or invariant trigger. M2 nevertheless declares
+    // several resolution-bounded capabilities `partial`; those declarations
+    // alone must not manufacture a review denominator.
+    const LEGACY_ORIGINS: [&str; 5] = [
+        "node.changed_public_symbol@2",
+        "relation.concurrent_reentry@1",
+        "relation.changed_call_contract@1",
+        "path.external_side_effect@1",
+        "invariant.payment_at_most_once@1",
+    ];
+    let floating_origins = bundle
+        .obligations()
+        .iter()
+        .filter(|obligation| {
+            obligation.version().rule() == "capability_gap.origin_rule@1"
+                && LEGACY_ORIGINS.iter().any(|origin| {
+                    obligation
+                        .applicability_reasons()
+                        .contains(&format!("origin_rule:{origin}"))
+                })
+        })
+        .flat_map(|obligation| {
+            LEGACY_ORIGINS.iter().filter_map(move |origin| {
+                obligation
+                    .applicability_reasons()
+                    .contains(&format!("origin_rule:{origin}"))
+                    .then_some((*origin).to_owned())
+            })
+        })
+        .collect::<BTreeSet<_>>();
     assert!(
-        !bundle.obligations().is_empty(),
-        "M2's bounded capabilities should synthesize at least one M1 obligation"
+        floating_origins.is_empty(),
+        "M2's bounded capabilities alone must not emit floating gaps for \
+         ineligible legacy origins: {floating_origins:?}"
+    );
+    assert!(
+        bundle.obligations().is_empty(),
+        "without a factual source trigger, M2 must not synthesize a substantive \
+         obligation or capability-gap denominator: {:?}",
+        bundle
+            .obligations()
+            .iter()
+            .map(|obligation| obligation.version().rule())
+            .collect::<Vec<_>>()
     );
 }
 
 #[test]
 fn capability_gap_obligation_reason_and_qualification_trace_are_verified() {
-    let repository = fixture_repository();
+    let mut repository = fixture_repository();
+    // The malformed file makes the node rule's two required capabilities
+    // partial. The later commit makes `worker` public and async, an
+    // independently observable, changed factual trigger.
+    commit_target_file(&mut repository, "src/broken.rs", "pub fn broken( {\n");
+    commit_target_file(
+        &mut repository,
+        "src/api.rs",
+        "pub async fn worker() {\n    let _changed = true;\n}\n",
+    );
     let result = ingest(&repository.request()).expect("M2 ingest succeeds");
     let bundle = MvpRulePack::synthesize(&result.program_space)
         .expect("a native v2 ProgramSpace synthesizes without an explicit migration step");
 
-    // M2 rule packs can synthesize more than one capability-gap obligation
-    // (one per rule with an unmet capability requirement, including rules
-    // requiring a capability M2 never declares at all, which is a
-    // legitimately different -- `capability_undeclared` -- reason). This
-    // test is specifically about M2's *own* permanently-partial
-    // capabilities, so it must select the gap obligation that actually
-    // names one of them, not merely the first gap obligation in sort order.
-    const PERMANENTLY_PARTIAL: [&str; 5] = [
-        "direct_calls",
-        "imports",
-        "module_dependencies",
-        "test_mapping",
-        "state_writes",
+    const NODE_RULE: &str = "node.changed_public_symbol@2";
+    const OTHER_LEGACY_ORIGINS: [&str; 4] = [
+        "relation.concurrent_reentry@1",
+        "relation.changed_call_contract@1",
+        "path.external_side_effect@1",
+        "invariant.payment_at_most_once@1",
     ];
+    assert_eq!(
+        result.extraction_report.capabilities["ast"],
+        CapabilityState::Partial,
+        "the retained malformed source makes AST coverage incomplete"
+    );
+    assert_eq!(
+        result.extraction_report.capabilities["concurrency_model"],
+        CapabilityState::Partial,
+        "the same retained parse limitation makes concurrency coverage incomplete"
+    );
+
+    let worker = result
+        .program_space
+        .artifacts()
+        .iter()
+        .find(|artifact| artifact.kind == "function" && artifact.label == "crate::api::worker")
+        .expect("the public async source-trigger worker is accepted as a function fact");
+    assert_eq!(
+        worker.attributes.get("public"),
+        Some(&serde_json::json!(true))
+    );
+    assert_eq!(
+        worker.attributes.get("async"),
+        Some(&serde_json::json!(true))
+    );
+    assert!(
+        result.program_space.relations().iter().any(|relation| {
+            relation.kind == "contains"
+                && relation.target_ids.contains(&worker.id)
+                && result
+                    .program_space
+                    .artifact(&relation.source_id)
+                    .is_some_and(|source| {
+                        source.attributes.get("changed") == Some(&serde_json::json!(true))
+                    })
+        }),
+        "the public async worker is a changed source candidate, not merely a named fixture"
+    );
+
+    assert_eq!(
+        bundle
+            .obligations()
+            .iter()
+            .map(|obligation| obligation.version().rule())
+            .collect::<Vec<_>>(),
+        vec![NODE_RULE, "capability_gap.origin_rule@1"],
+        "the eligible node trigger yields its concrete obligation and exactly one typed \
+         origin gap; the other four legacy origins remain outside the denominator"
+    );
+    assert!(
+        bundle.obligations().iter().all(|obligation| {
+            OTHER_LEGACY_ORIGINS.iter().all(|origin| {
+                !obligation
+                    .applicability_reasons()
+                    .contains(&format!("origin_rule:{origin}"))
+            })
+        }),
+        "no ineligible legacy origin may retain a floating capability gap"
+    );
+
+    let concrete = bundle
+        .obligations()
+        .iter()
+        .find(|obligation| obligation.version().rule() == NODE_RULE)
+        .expect("the eligible source trigger materializes its concrete node obligation");
+    assert_eq!(concrete.target_refs(), std::slice::from_ref(&worker.id));
+    assert_eq!(concrete.applicability_status(), "unknown");
+
     let gap_obligation = bundle
         .obligations()
         .iter()
         .find(|obligation| {
             obligation.version().rule() == "capability_gap.origin_rule@1"
-                && obligation.property_id() == "reviewgraphen.capability_gap"
-                && obligation.applicability_reasons().iter().any(|reason| {
-                    PERMANENTLY_PARTIAL
-                        .iter()
-                        .any(|capability| *reason == format!("capability_partial:{capability}"))
-                })
+                && obligation
+                    .applicability_reasons()
+                    .contains(&format!("origin_rule:{NODE_RULE}"))
         })
         .expect(
-            "M2's permanently-partial capabilities must synthesize at least one \
-             capability-gap obligation naming one of them",
+            "an eligible node trigger with incomplete required capabilities retains its \
+             typed origin capability gap",
         );
-    assert_eq!(
-        gap_obligation.applicability_status(),
-        "unknown",
-        "a capability-gap obligation's applicability status must be `unknown`"
-    );
-
+    assert_eq!(gap_obligation.applicability_status(), "unknown");
     let reasons = gap_obligation.applicability_reasons();
-    assert!(
-        reasons
-            .iter()
-            .any(|reason| reason.starts_with("origin_rule:")),
-        "reasons must name the origin rule the gap was raised for: {reasons:?}"
+    assert_eq!(
+        reasons,
+        &BTreeSet::from([
+            format!("origin_rule:{NODE_RULE}"),
+            "capability_partial:ast".to_owned(),
+            "capability_partial:concurrency_model".to_owned(),
+        ]),
+        "the typed gap retains its exact origin and non-collapsed incomplete-capability reasons"
     );
-    let partial_reasons = reasons
+    assert_eq!(
+        gap_obligation.target_refs(),
+        std::slice::from_ref(result.program_space.snapshot_id())
+    );
+    assert_eq!(gap_obligation.weight(), 3.0);
+    let expected_gap_sources = BTreeSet::from([
+        result.program_space.repository_id().clone(),
+        result.program_space.snapshot_id().clone(),
+    ])
+    .into_iter()
+    .collect::<Vec<_>>();
+    assert_eq!(gap_obligation.source_ids(), expected_gap_sources.as_slice());
+
+    let expected_gap_id = StableId::derived(
+        "obligation",
+        &BTreeMap::from([
+            (
+                "applicability_scope".to_owned(),
+                serde_json::Value::Array(Vec::new()),
+            ),
+            (
+                "capability_gap_reasons".to_owned(),
+                serde_json::Value::Array(
+                    [
+                        "capability_partial:ast".to_owned(),
+                        "capability_partial:concurrency_model".to_owned(),
+                    ]
+                    .into_iter()
+                    .map(serde_json::Value::String)
+                    .collect(),
+                ),
+            ),
+            (
+                "normalized_target_refs".to_owned(),
+                serde_json::Value::Array(vec![serde_json::Value::String(
+                    result.program_space.snapshot_id().to_string(),
+                )]),
+            ),
+            (
+                "origin_rule".to_owned(),
+                serde_json::Value::String(NODE_RULE.to_owned()),
+            ),
+            (
+                "profile".to_owned(),
+                serde_json::Value::String("code-review@1".to_owned()),
+            ),
+            (
+                "property".to_owned(),
+                serde_json::Value::String("reviewgraphen.capability_gap".to_owned()),
+            ),
+            (
+                "rule".to_owned(),
+                serde_json::Value::String("capability_gap.origin_rule@1".to_owned()),
+            ),
+            (
+                "snapshot_semantic_id".to_owned(),
+                serde_json::Value::String(result.program_space.snapshot_id().to_string()),
+            ),
+        ]),
+    )
+    .expect("the reason-bound gap identity bindings are canonical");
+    assert_eq!(
+        gap_obligation.id(),
+        &expected_gap_id,
+        "the gap ID is bound to the exact origin and partial-capability reasons"
+    );
+    let concrete_index = bundle
+        .obligations()
         .iter()
-        .filter(|reason| {
-            PERMANENTLY_PARTIAL
-                .iter()
-                .any(|capability| *reason == &format!("capability_partial:{capability}"))
-        })
-        .collect::<Vec<_>>();
+        .position(|obligation| obligation.id() == concrete.id())
+        .expect("concrete obligation remains in the ordered bundle");
+    let gap_index = bundle
+        .obligations()
+        .iter()
+        .position(|obligation| obligation.id() == gap_obligation.id())
+        .expect("gap obligation remains in the ordered bundle");
     assert!(
-        !partial_reasons.is_empty(),
-        "reasons must distinguish `capability_partial:<name>` for one of M2's \
-         permanently-partial capabilities, not a collapsed generic tag: {reasons:?}"
+        concrete_index < gap_index,
+        "the rule-pack ordering keeps the concrete source obligation before its gap"
     );
 
     let qualification_ids = gap_obligation.qualification_ids();
@@ -3196,26 +3373,20 @@ fn capability_gap_obligation_reason_and_qualification_trace_are_verified() {
         .limitations
         .iter()
         .map(|limitation| (&limitation.id, limitation))
-        .collect::<std::collections::BTreeMap<_, _>>();
+        .collect::<BTreeMap<_, _>>();
     for qualification_id in qualification_ids {
         let limitation = limitations_by_id
             .get(qualification_id)
             .expect("qualification_id must resolve to a real ProgramSpace limitation");
         assert!(
-            !limitation.related_capabilities.is_empty(),
-            "a limitation reachable via qualification_ids must actually relate to a \
-             named capability, not an untied obstruction"
-        );
-        assert!(
             limitation.related_capabilities.iter().any(|capability| {
-                reasons
-                    .iter()
-                    .any(|reason| reason.ends_with(&format!(":{capability}")))
+                ["ast", "concurrency_model"].contains(&capability.as_str())
+                    && reasons
+                        .iter()
+                        .any(|reason| reason == &format!("capability_partial:{capability}"))
             }),
-            "the qualifying limitation `{}`'s related_capabilities {:?} must \
-             correspond to one of the obligation's reasons {reasons:?}",
-            limitation.id,
-            limitation.related_capabilities
+            "the qualifying limitation `{}` must justify one exact node-gap reason {reasons:?}",
+            limitation.id
         );
     }
 }

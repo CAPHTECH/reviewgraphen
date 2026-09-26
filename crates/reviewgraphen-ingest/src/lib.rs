@@ -4,8 +4,16 @@
 //! not execute target code, expand macros, infer dispatch targets, or turn a
 //! missing fact into an absence claim.
 
+mod g3;
 mod git;
 mod rust;
+pub mod source_graph;
+pub mod source_review;
+pub mod typescript;
+
+#[cfg(test)]
+#[path = "g3/acceptance/mod.rs"]
+mod generic_rc2_g3_acceptance;
 
 use reviewgraphen_core::{
     self as rg_core, ContentHash, DomainError, ProgramSpace, SnapshotSourceBundle,
@@ -17,7 +25,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
-pub use git::ChangeKind;
+pub use git::{ChangeKind, GitTreeEntryKind, GitTreeTable};
 
 /// Versioned identifier for the public ingestion report shape.
 pub const EXTRACTION_REPORT_SCHEMA: &str = "reviewgraphen.extraction_report.v1";
@@ -546,6 +554,52 @@ pub struct IngestResult {
     pub extraction_report: ExtractionReport,
 }
 
+/// One accepted syntactically unique Rust direct-call source occurrence.
+///
+/// This is an in-memory source-retaining seam. It is deliberately not part of
+/// ProgramSpace or any serialized ingestion output.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolvedDirectCallOccurrence {
+    relation_id: StableId,
+    path: String,
+    start_line: u64,
+    end_line: u64,
+    start_column: u64,
+    end_column: u64,
+}
+
+impl ResolvedDirectCallOccurrence {
+    #[must_use]
+    pub fn relation_id(&self) -> &StableId {
+        &self.relation_id
+    }
+
+    #[must_use]
+    pub fn path(&self) -> &str {
+        &self.path
+    }
+
+    #[must_use]
+    pub const fn start_line(&self) -> u64 {
+        self.start_line
+    }
+
+    #[must_use]
+    pub const fn end_line(&self) -> u64 {
+        self.end_line
+    }
+
+    #[must_use]
+    pub const fn start_column(&self) -> u64 {
+        self.start_column
+    }
+
+    #[must_use]
+    pub const fn end_column(&self) -> u64 {
+        self.end_column
+    }
+}
+
 /// Successful source-retaining ingest result. Source bytes are a validated
 /// snapshot handoff, separate from accepted ProgramSpace facts and evidence.
 #[derive(Clone, Debug, PartialEq)]
@@ -556,6 +610,8 @@ pub struct IngestWithSourcesResult {
     pub extraction_report: ExtractionReport,
     /// Exact source bytes for every accepted file artifact in this snapshot.
     pub source_bundle: SnapshotSourceBundle,
+    resolved_direct_call_occurrences: Vec<ResolvedDirectCallOccurrence>,
+    g3_rust: Result<g3::rust::RustG3BatchV1, g3::rust::G3AccountingError>,
 }
 
 /// The only public route that couples unchanged legacy ingestion with the
@@ -581,6 +637,22 @@ impl IngestResult {
             extraction_report: &self.extraction_report,
         })
         .map_err(IngestError::from)
+    }
+}
+
+impl IngestWithSourcesResult {
+    /// Source-bound, nonserialized G3 observations of this ingest's own Git snapshot.
+    #[allow(dead_code)] // G3's internal consumer is enabled by the subsequent admission slice.
+    pub(crate) fn g3_observations(
+        &self,
+    ) -> Result<&g3::rust::RustG3BatchV1, &g3::rust::G3AccountingError> {
+        self.g3_rust.as_ref()
+    }
+
+    /// Accepted Rust direct-call occurrences with exact source locations.
+    #[must_use]
+    pub fn resolved_direct_call_occurrences(&self) -> &[ResolvedDirectCallOccurrence] {
+        &self.resolved_direct_call_occurrences
     }
 }
 
@@ -749,6 +821,10 @@ pub fn ingest_with_sources(
         program_space: result.ingest.program_space,
         extraction_report: result.ingest.extraction_report,
         source_bundle,
+        resolved_direct_call_occurrences: result.resolved_direct_call_occurrences,
+        g3_rust: result
+            .g3_rust
+            .expect("source-retaining pipeline observes G3"),
     })
 }
 
@@ -777,6 +853,10 @@ pub fn ingest_with_sources_v2(
             program_space: result.ingest.program_space,
             extraction_report: result.ingest.extraction_report,
             source_bundle,
+            resolved_direct_call_occurrences: result.resolved_direct_call_occurrences,
+            g3_rust: result
+                .g3_rust
+                .expect("source-retaining pipeline observes G3"),
         },
         ingestion_report_v2: result
             .ingestion_report_v2
@@ -788,6 +868,8 @@ struct IngestPipelineResult {
     ingest: IngestResult,
     source_bundle: Option<SnapshotSourceBundle>,
     ingestion_report_v2: Option<IngestionReportV2>,
+    resolved_direct_call_occurrences: Vec<ResolvedDirectCallOccurrence>,
+    g3_rust: Option<Result<g3::rust::RustG3BatchV1, g3::rust::G3AccountingError>>,
 }
 
 /// Shared private pipeline for source-retaining and ordinary ingestion.
@@ -906,6 +988,7 @@ fn ingest_pipeline(
                 attributes: Map::new(),
                 source_path: Some(change.target_path.clone()),
                 extraction_method: "reviewgraphen.ingest.git.changed_structure.v1",
+                resolved_direct_call_occurrence: None,
             });
             // Every other accepted record at this path (function, method,
             // type, test, state, ...) links to the change through this
@@ -930,6 +1013,7 @@ fn ingest_pipeline(
                     attributes: Map::new(),
                     source_path: Some(change.target_path.clone()),
                     extraction_method: "reviewgraphen.ingest.git.changed_structure.v1",
+                    resolved_direct_call_occurrence: None,
                 });
                 // The same membership, in the direction a consumer reading
                 // containment travels: the change-family artifact contains
@@ -949,12 +1033,13 @@ fn ingest_pipeline(
                     attributes: Map::new(),
                     source_path: Some(change.target_path.clone()),
                     extraction_method: "reviewgraphen.ingest.git.changed_structure.v1",
+                    resolved_direct_call_occurrence: None,
                 });
             }
         }
     }
 
-    let lifted = lift(
+    let lifted = lift_with_resolved_direct_call_occurrences(
         &snapshot,
         &identities,
         LiftInputs {
@@ -968,11 +1053,11 @@ fn ingest_pipeline(
         },
     )?;
     let ingestion_report_v2 = if include_v2 {
-        let legacy_index = V2LegacyValidationIndex::new(&lifted)?;
+        let legacy_index = V2LegacyValidationIndex::new(&lifted.ingest)?;
         let report = build_ingestion_report_v2(
             &snapshot,
             &identities,
-            &lifted,
+            &lifted.ingest,
             &legacy_index,
             v2_obstruction_drafts,
         )?;
@@ -983,7 +1068,7 @@ fn ingest_pipeline(
         let rebuilt = build_ingestion_report_v2(
             &snapshot,
             &identities,
-            &lifted,
+            &lifted.ingest,
             &legacy_index,
             rebuilt_obstructions,
         )?;
@@ -1001,13 +1086,119 @@ fn ingest_pipeline(
         None
     };
     let source_bundle = max_total_source_bytes
-        .map(|_| source_bundle_from_snapshot(&snapshot, &lifted.program_space))
+        .map(|_| source_bundle_from_snapshot(&snapshot, &lifted.ingest.program_space))
         .transpose()?;
+    let g3_rust = source_bundle.as_ref().map(|bundle| {
+        observe_g3_rust_admission(
+            bundle,
+            &lifted.ingest.program_space,
+            &lifted.resolved_direct_call_occurrences,
+            &snapshot,
+            &lifted.ingest.extraction_report,
+        )
+    });
     Ok(IngestPipelineResult {
-        ingest: lifted,
+        ingest: lifted.ingest,
         source_bundle,
         ingestion_report_v2,
+        resolved_direct_call_occurrences: lifted.resolved_direct_call_occurrences,
+        g3_rust,
     })
+}
+
+fn observe_g3_rust_admission(
+    bundle: &SnapshotSourceBundle,
+    program: &ProgramSpace,
+    direct_calls: &[ResolvedDirectCallOccurrence],
+    snapshot: &git::GitSnapshot,
+    report: &ExtractionReport,
+) -> Result<g3::rust::RustG3BatchV1, g3::rust::G3AccountingError> {
+    use g3::rust::G3AccountingError as Error;
+    if bundle.snapshot_id() != program.snapshot_id() || report.snapshot_id != *bundle.snapshot_id()
+    {
+        return Err(Error::BindingMismatch {
+            path: "<snapshot>".to_owned(),
+        });
+    }
+    let mut refs = Vec::new();
+    let mut paths = BTreeSet::new();
+    for entry in &snapshot.excluded_entries {
+        let path = &entry.path;
+        if !paths.insert(path.as_str()) || snapshot.files.iter().any(|file| file.path == *path) {
+            return Err(Error::GitExclusionMismatch { path: path.clone() });
+        }
+        let kind = match entry.kind {
+            git::GitExcludedEntryKind::Symlink => IngestionObstructionKind::RegionExcluded,
+            git::GitExcludedEntryKind::Gitlink | git::GitExcludedEntryKind::OtherUnsupported => {
+                IngestionObstructionKind::UnsupportedInput
+            }
+        };
+        let candidates = snapshot
+            .issues
+            .iter()
+            .filter(|issue| {
+                issue.paths.len() == 1 && issue.paths.contains(path) && issue.kind == kind
+            })
+            .collect::<Vec<_>>();
+        let [issue] = candidates.as_slice() else {
+            return Err(Error::GitExclusionMismatch { path: path.clone() });
+        };
+        // The old producer's issue identity includes its source keys. Resolve
+        // only typed keys from the same snapshot, never parse its prose or
+        // reconstruct an obstruction ID from the English description.
+        let source_ids = if issue.source_keys.is_empty() {
+            BTreeSet::from([bundle.snapshot_id().clone()])
+        } else {
+            issue
+                .source_keys
+                .iter()
+                .map(|key| {
+                    if !snapshot
+                        .changes
+                        .iter()
+                        .any(|change| git::change_key(change) == *key)
+                    {
+                        return Err(Error::GitExclusionMismatch { path: path.clone() });
+                    }
+                    derived_id(
+                        "change",
+                        [
+                            ("snapshot", Value::String(bundle.snapshot_id().to_string())),
+                            ("key", Value::String(key.clone())),
+                        ],
+                    )
+                    .map_err(|_| Error::IdDerivation { domain: "change" })
+                })
+                .collect::<Result<BTreeSet<_>, _>>()?
+        };
+        let matching = report
+            .obstructions
+            .iter()
+            .filter(|row| {
+                row.paths.len() == 1
+                    && row.paths.contains(path)
+                    && row.kind == issue.kind
+                    && row.severity == issue.severity
+                    && row.description == issue.description
+                    && row.source_ids == source_ids
+            })
+            .collect::<Vec<_>>();
+        let [accepted] = matching.as_slice() else {
+            return Err(Error::GitExclusionMismatch { path: path.clone() });
+        };
+        refs.push((entry.clone(), kind, accepted.id.clone()));
+    }
+    let adapters = report
+        .adapters
+        .iter()
+        .filter(|adapter| adapter.id == "reviewgraphen.ingest.git")
+        .collect::<Vec<_>>();
+    if !matches!(adapters.as_slice(), [adapter] if adapter.excluded == Some(refs.len() as u64)) {
+        return Err(Error::GitExclusionMismatch {
+            path: "<git-adapter>".to_owned(),
+        });
+    }
+    g3::rust::observe(bundle, program, direct_calls, &refs)
 }
 
 struct V2LegacyValidationIndex {
@@ -2164,6 +2355,12 @@ pub(crate) struct RelationDraft {
     pub(crate) attributes: Map<String, Value>,
     pub(crate) source_path: Option<String>,
     pub(crate) extraction_method: &'static str,
+    pub(crate) resolved_direct_call_occurrence: Option<ResolvedDirectCallOccurrenceDraft>,
+}
+
+#[derive(Clone)]
+pub(crate) struct ResolvedDirectCallOccurrenceDraft {
+    pub(crate) location: LocationDraft,
 }
 
 #[derive(Clone, Debug)]
@@ -2270,11 +2467,25 @@ struct LiftInputs {
 /// a validated core type, from the same [`ArtifactDraft`]/[`RelationDraft`]/
 /// [`IssueDraft`] typed intermediate the [`ExtractionReport`] is also built
 /// from. There is no intermediate v1 JSON document and no migration step.
+#[cfg(test)]
 fn lift(
     snapshot: &git::GitSnapshot,
     identities: &SnapshotIdentities,
     inputs: LiftInputs,
 ) -> Result<IngestResult, IngestError> {
+    Ok(lift_with_resolved_direct_call_occurrences(snapshot, identities, inputs)?.ingest)
+}
+
+struct LiftedIngestResult {
+    ingest: IngestResult,
+    resolved_direct_call_occurrences: Vec<ResolvedDirectCallOccurrence>,
+}
+
+fn lift_with_resolved_direct_call_occurrences(
+    snapshot: &git::GitSnapshot,
+    identities: &SnapshotIdentities,
+    inputs: LiftInputs,
+) -> Result<LiftedIngestResult, IngestError> {
     let LiftInputs {
         drafts,
         relation_drafts,
@@ -2331,6 +2542,7 @@ fn lift(
 
     let mut relation_by_id = BTreeMap::<StableId, rg_core::Relation>::new();
     let mut relation_target_order = BTreeMap::<StableId, Vec<StableId>>::new();
+    let mut resolved_direct_call_occurrences = Vec::new();
     for draft in relation_drafts {
         let Some(source_id) = id_by_key.get(&draft.source_key) else {
             return Err(IngestError::AdapterOutput(format!(
@@ -2376,6 +2588,21 @@ fn lift(
                 ("attributes", Value::Object(draft.attributes.clone())),
             ],
         )?;
+        let resolved_direct_call_occurrence = draft.resolved_direct_call_occurrence;
+        if let Some(occurrence) = &resolved_direct_call_occurrence {
+            let resolution = draft.attributes.get("resolution").and_then(Value::as_str);
+            if draft.kind != "calls"
+                || resolution != Some("syntactic_unique")
+                || draft.source_path.as_deref() != Some(occurrence.location.path.as_str())
+                || !source_for_path.contains_key(&occurrence.location.path)
+            {
+                return Err(IngestError::AdapterOutput(
+                    "resolved direct-call occurrence draft is not bound to an accepted Rust \
+                     syntactic-unique calls relation with an admitted source path"
+                        .to_owned(),
+                ));
+            }
+        }
         let provenance = provenance(
             snapshot,
             draft.source_path.as_deref(),
@@ -2391,6 +2618,7 @@ fn lift(
             core_attributes(draft.attributes),
             provenance,
         )?;
+        let occurrence_relation_id = relation_id.clone();
         match relation_by_id.get(&relation_id) {
             Some(existing) if existing != &relation => {
                 return Err(IngestError::Core(DomainError::IdCollision {
@@ -2403,7 +2631,26 @@ fn lift(
                 relation_by_id.insert(relation_id, relation);
             }
         }
+        if let Some(occurrence) = resolved_direct_call_occurrence {
+            resolved_direct_call_occurrences.push(ResolvedDirectCallOccurrence {
+                relation_id: occurrence_relation_id,
+                path: occurrence.location.path,
+                start_line: occurrence.location.start_line,
+                end_line: occurrence.location.end_line,
+                start_column: occurrence.location.start_column,
+                end_column: occurrence.location.end_column,
+            });
+        }
     }
+    resolved_direct_call_occurrences.sort_by(|left, right| {
+        left.relation_id
+            .cmp(&right.relation_id)
+            .then_with(|| left.path.cmp(&right.path))
+            .then_with(|| left.start_line.cmp(&right.start_line))
+            .then_with(|| left.end_line.cmp(&right.end_line))
+            .then_with(|| left.start_column.cmp(&right.start_column))
+            .then_with(|| left.end_column.cmp(&right.end_column))
+    });
 
     let mut limitation_by_id = BTreeMap::<StableId, rg_core::Limitation>::new();
     let mut obstruction_by_id = BTreeMap::<StableId, IngestionObstruction>::new();
@@ -2589,9 +2836,12 @@ fn lift(
         capabilities,
         obstructions,
     };
-    Ok(IngestResult {
-        program_space,
-        extraction_report,
+    Ok(LiftedIngestResult {
+        ingest: IngestResult {
+            program_space,
+            extraction_report,
+        },
+        resolved_direct_call_occurrences,
     })
 }
 
@@ -2708,6 +2958,7 @@ mod source_key_resolution_tests {
                 .expect("valid test tree hash"),
             config: IngestConfig::default(),
             files: Vec::new(),
+            excluded_entries: Vec::new(),
             changes: Vec::new(),
             issues: Vec::new(),
             adapter_reports: Vec::new(),
@@ -3070,6 +3321,7 @@ mod source_key_resolution_tests {
                 attributes: Map::new(),
                 source_path: None,
                 extraction_method: "reviewgraphen.ingest.test.v1",
+                resolved_direct_call_occurrence: None,
             });
             lift(&snapshot, &identities, inputs).expect("ordered relation lifts")
         };
@@ -3136,6 +3388,7 @@ mod adapter_set_hash_tests {
                 .expect("valid test tree hash"),
             config,
             files: Vec::new(),
+            excluded_entries: Vec::new(),
             changes: Vec::new(),
             issues: Vec::new(),
             adapter_reports: Vec::new(),
@@ -3485,6 +3738,7 @@ mod cargo_failure_identity_tests {
                 .expect("valid test tree hash"),
             config: IngestConfig::default(),
             files: vec![file],
+            excluded_entries: Vec::new(),
             changes: Vec::new(),
             issues: Vec::new(),
             adapter_reports: Vec::new(),
@@ -3818,6 +4072,7 @@ mod cargo_executable_path_independence_tests {
                 .expect("valid test tree hash"),
             config: IngestConfig::default(),
             files: vec![file],
+            excluded_entries: Vec::new(),
             changes: Vec::new(),
             issues: Vec::new(),
             adapter_reports: Vec::new(),

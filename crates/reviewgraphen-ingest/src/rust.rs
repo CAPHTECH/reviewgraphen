@@ -3,7 +3,7 @@ use crate::{
     AdapterReport, AdapterStatus, ArtifactDraft, CallKind, CallObstructionReason,
     CallOccurrenceDraft, CapabilityState, IngestionObstructionKind, IssueDraft,
     LatentOccurrenceCount, LocationDraft, ObstructionSeverity, RelationDraft,
-    V2IngestionObstructionDraft,
+    ResolvedDirectCallOccurrenceDraft, V2IngestionObstructionDraft,
 };
 use proc_macro2::{Delimiter, Span, TokenStream, TokenTree};
 use quote::ToTokens;
@@ -113,6 +113,7 @@ pub(crate) fn extract(snapshot: &GitSnapshot, _snapshot_id: &StableId) -> RustEx
                 )]),
                 source_path: Some(file.path.clone()),
                 extraction_method: "reviewgraphen.ingest.rust_syn.v1",
+                resolved_direct_call_occurrence: None,
             });
         }
         relations.extend(visitor.relations);
@@ -324,6 +325,7 @@ fn collect_file_declarations(
         attributes: Map::new(),
         source_path: Some(file.path.clone()),
         extraction_method: "reviewgraphen.ingest.rust_syn.v1",
+        resolved_direct_call_occurrence: None,
     });
     let context = DeclarationContext {
         module_key: file.root_module_key.clone(),
@@ -645,6 +647,7 @@ fn collect_module(
         attributes: Map::new(),
         source_path: Some(file.path.clone()),
         extraction_method: "reviewgraphen.ingest.rust_syn.v1",
+        resolved_direct_call_occurrence: None,
     });
     if let Some((_, nested)) = &module.content {
         collect_items(
@@ -882,6 +885,7 @@ fn collect_import(
             )]),
             source_path: Some(file.path.clone()),
             extraction_method: "reviewgraphen.ingest.rust_syn.v1",
+            resolved_direct_call_occurrence: None,
         });
     }
 }
@@ -965,6 +969,7 @@ fn containment(source_key: &str, target_key: &str, path: &str) -> RelationDraft 
         attributes: Map::new(),
         source_path: Some(path.to_owned()),
         extraction_method: "reviewgraphen.ingest.rust_syn.v1",
+        resolved_direct_call_occurrence: None,
     }
 }
 
@@ -1105,6 +1110,7 @@ impl ConcurrencyMarkers {
                 attributes: Map::from_iter([("line".to_owned(), Value::Number((*line).into()))]),
                 source_path: Some(path.to_owned()),
                 extraction_method: "reviewgraphen.ingest.rust_syn.v1",
+                resolved_direct_call_occurrence: None,
             })
             .collect()
     }
@@ -2122,6 +2128,9 @@ impl<'a> FunctionBodyVisitor<'a> {
             ]),
             source_path: Some(self.path.to_owned()),
             extraction_method: "reviewgraphen.ingest.rust_syn.v1",
+            resolved_direct_call_occurrence: Some(ResolvedDirectCallOccurrenceDraft {
+                location: location(self.path, call.span()),
+            }),
         });
         if source_key.starts_with("test:") {
             self.relations.push(RelationDraft {
@@ -2144,6 +2153,7 @@ impl<'a> FunctionBodyVisitor<'a> {
                 ]),
                 source_path: Some(self.path.to_owned()),
                 extraction_method: "reviewgraphen.ingest.rust_syn.v1",
+                resolved_direct_call_occurrence: None,
             });
         }
     }

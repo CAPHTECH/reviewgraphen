@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ReviewGraphen TypeScript source-review run v5",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "registry_binding", "run_id", "request_id", "basis_binding", "extraction_binding", "ingestion_binding", "obligations", "obligation_partition", "plan_partition", "coverage", "source_trace", "execution", "authority"],
+  "properties": {
+    "schema": {"const": "reviewgraphen.generic_review_run.v5"},
+    "registry_binding": {"$ref": "#/$defs/registry_binding"},
+    "run_id": {"type": "string", "minLength": 1},
+    "request_id": {"type": "string", "minLength": 1},
+    "basis_binding": {"$ref": "#/$defs/binding"},
+    "extraction_binding": {"$ref": "#/$defs/binding"},
+    "ingestion_binding": {"$ref": "#/$defs/binding"},
+    "obligations": {"type": "array", "items": {"$ref": "#/$defs/obligation"}},
+    "obligation_partition": {"type": "object"},
+    "plan_partition": {"type": "object"},
+    "coverage": {"type": "object"},
+    "source_trace": {"type": "object"},
+    "execution": {"$ref": "#/$defs/execution"},
+    "authority": {"$ref": "#/$defs/authority"}
+  },
+  "$defs": {
+    "hash": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "registry_binding": {"type": "object", "additionalProperties": false, "required": ["registry_id", "registry_hash", "arm_id", "arm_hash", "tuple_hash"], "properties": {"registry_id": {"type": "string"}, "registry_hash": {"$ref": "#/$defs/hash"}, "arm_id": {"type": "string"}, "arm_hash": {"$ref": "#/$defs/hash"}, "tuple_hash": {"$ref": "#/$defs/hash"}}},
+    "binding": {"type": "object", "additionalProperties": false, "required": ["registry_binding", "artifact_hash"], "properties": {"registry_binding": {"$ref": "#/$defs/registry_binding"}, "artifact_hash": {"$ref": "#/$defs/hash"}}},
+    "obligation": {"type": "object", "additionalProperties": false, "required": ["id", "registry_binding", "rule_id", "property_id", "origin_rule_id", "target_kind", "status"], "properties": {"id": {"type": "string"}, "registry_binding": {"$ref": "#/$defs/registry_binding"}, "rule_id": {"type": "string"}, "property_id": {"type": "string"}, "origin_rule_id": {"anyOf": [{"type": "string"}, {"type": "null"}]}, "target_kind": {"enum": ["node", "relation", "subgraph"]}, "status": {"const": "deferred"}}},
+    "execution": {"type": "object", "additionalProperties": false, "required": ["mode", "context_projection", "reviewer_execution", "verifier_execution"], "properties": {"mode": {"const": "enumerate_and_defer"}, "context_projection": {"const": "unavailable"}, "reviewer_execution": {"const": "not_run"}, "verifier_execution": {"const": "not_run"}}},
+    "authority": {"type": "object", "additionalProperties": false, "required": ["trusted_pass"], "properties": {"trusted_pass": {"const": false}}}
+  }
+}

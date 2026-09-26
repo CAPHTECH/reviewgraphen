@@ -955,6 +955,10 @@ impl MvpRulePack {
 
         let mut exclusions = Vec::new();
         let mut obligations = Vec::new();
+        // A capability gap qualifies a source-triggered rule candidate; it
+        // does not make an otherwise inapplicable descriptor part of the
+        // obligation universe.
+        let mut eligible_origin_rules = BTreeSet::new();
         let mut node_ids = BTreeMap::<StableId, StableId>::new();
 
         for artifact in program.artifacts() {
@@ -975,6 +979,7 @@ impl MvpRulePack {
                 )?);
                 continue;
             }
+            eligible_origin_rules.insert("node.changed_public_symbol@2");
             let target_refs = vec![artifact.id.clone()];
             let node_obligation = materialize(
                 program,
@@ -1007,6 +1012,7 @@ impl MvpRulePack {
             {
                 continue;
             }
+            eligible_origin_rules.insert("relation.concurrent_reentry@1");
             let dependencies = relation
                 .target_ids
                 .iter()
@@ -1051,6 +1057,7 @@ impl MvpRulePack {
             if !reaches_external_effect {
                 continue;
             }
+            eligible_origin_rules.insert("relation.changed_call_contract@1");
             let target_refs = vec![relation.id.clone()];
             let obligation = materialize(
                 program,
@@ -1104,6 +1111,7 @@ impl MvpRulePack {
                             ];
                             let path_generators = target_refs.iter().cloned().collect();
                             let path_context_ids = contexts_for_path(program, &target_refs);
+                            eligible_origin_rules.insert("path.external_side_effect@1");
                             let path_obligation = materialize(
                                 program,
                                 ObligationSpec {
@@ -1150,6 +1158,7 @@ impl MvpRulePack {
                                 {
                                     continue;
                                 }
+                                eligible_origin_rules.insert("invariant.payment_at_most_once@1");
                                 let mut invariant_context_ids = path_context_ids.clone();
                                 invariant_context_ids.extend(scoped_context_ids.iter().cloned());
                                 invariant_context_ids.sort();
@@ -1225,7 +1234,7 @@ impl MvpRulePack {
                 .filter(|capability| !capability_fully_available(program, capability))
                 .cloned()
                 .collect::<BTreeSet<_>>();
-            if missing.is_empty() {
+            if missing.is_empty() || !eligible_origin_rules.contains(descriptor.id) {
                 continue;
             }
             let mut reasons = missing

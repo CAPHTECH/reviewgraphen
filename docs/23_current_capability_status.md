@@ -14,6 +14,32 @@
 > presented as verified. `crates/` was read but not modified while
 > producing this document.
 
+## Addendum 2026-09-26: source review v6
+
+ADR 0053 adds a separate route, `reviewgraphen.source_review_request.v6`,
+for Rust, TypeScript and Kotlin. It changes no existing route, rule ID,
+registry or byte.
+
+For each base→target change, the route emits deferred obligations of four
+kinds:
+
+- changed public callables, functions **and methods**;
+- every resolved caller of a changed callable, labelled
+  `exact` / `name_only` / `ambiguous`;
+- removed public callables;
+- gaps for sources it could not fully analyze.
+
+It closes three gaps found in a smoke check on 2026-09-26:
+
+- The earlier Kotlin v5 route emitted no obligations (it is retired in
+  0.2.0; Kotlin is reviewed through source review v6).
+- TypeScript v5 never emits changed-callee relations.
+- Methods are excluded everywhere.
+
+Its evidence is `crates/reviewgraphen-cli/tests/source_review_v6_acceptance.rs`
+and `crates/reviewgraphen-ingest/src/source_graph/tests.rs`. It is not
+covered by the G7 harness or the G8 acceptance.
+
 ## 1. The one-paragraph answer
 
 As of today, `MvpRulePack::synthesize` produces a genuine, non-placeholder

@@ -27,7 +27,9 @@ mod projection;
 mod responsibility_family;
 mod review;
 mod source;
+pub mod source_review;
 mod synthesize;
+pub mod typescript;
 
 // M1 exercises crate-private legacy replay scaffolding. Keeping it inside the
 // crate prevents that compatibility builder from becoming a public API.

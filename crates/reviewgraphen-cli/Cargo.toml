@@ -16,9 +16,10 @@ workspace = true
 
 [dependencies]
 jsonschema.workspace = true
-reviewgraphen-core = { path = "../reviewgraphen-core", version = "0.1.0" }
-reviewgraphen-report = { path = "../reviewgraphen-report", version = "0.1.0" }
-reviewgraphen-runtime = { path = "../reviewgraphen-runtime", version = "0.1.0" }
+reviewgraphen-core = { path = "../reviewgraphen-core", version = "0.2.0" }
+reviewgraphen-report = { path = "../reviewgraphen-report", version = "0.2.0" }
+reviewgraphen-ingest = { path = "../reviewgraphen-ingest", version = "0.2.0" }
+reviewgraphen-runtime = { path = "../reviewgraphen-runtime", version = "0.2.0" }
 rustix.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true

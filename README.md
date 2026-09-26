@@ -2,7 +2,7 @@
 
 **ReviewGraphen** は、AIレビューを「一回の賢いプロンプト」から、**構造化されたレビュー義務を計画・実行・検証・追跡する工程**へ変える、HigherGraphen上のグラフ駆動レビュー基盤です。
 
-> Status: Public alpha v0.1.0
+> Status: Public alpha v0.2.0
 > Baseline: 2026-09-15 / HigherGraphen 0.7.1 / `CAPHTECH/higher-graphen@0f1e1cfe`
 > Methodology: Graph-Driven Review  
 > Primary artifact: Review Graph  
@@ -156,7 +156,7 @@ sh install.sh
 対象とversionは限定できます。
 
 ```bash
-sh install.sh --version 0.1.0 --targets cli,codex
+sh install.sh --version 0.2.0 --targets cli,codex
 sh install.sh --targets claude --claude-home "$HOME/.claude"
 ```
 

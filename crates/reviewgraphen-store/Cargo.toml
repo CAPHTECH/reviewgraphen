@@ -13,7 +13,7 @@ license = "Apache-2.0"
 test-support = ["dep:base64", "dep:tempfile"]
 
 [dependencies]
-reviewgraphen-core = { path = "../reviewgraphen-core", version = "0.1.0" }
+reviewgraphen-core = { path = "../reviewgraphen-core", version = "0.2.0" }
 base64 = { version = "=0.22.1", optional = true }
 rustix.workspace = true
 thiserror.workspace = true
@@ -25,7 +25,7 @@ tempfile = { workspace = true, optional = true }
 
 [dev-dependencies]
 tempfile.workspace = true
-reviewgraphen-ingest = { path = "../reviewgraphen-ingest", version = "0.1.0" }
+reviewgraphen-ingest = { path = "../reviewgraphen-ingest", version = "0.2.0" }
 
 [lints]
 workspace = true

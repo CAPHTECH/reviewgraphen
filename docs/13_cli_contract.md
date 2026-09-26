@@ -63,6 +63,67 @@ exit 21を割り当てない。10秒watchdogはprebuilt fail-fast fixtureを監�
 `reviewgraphen.generic_review_diagnostics.v1`をcreate-newで書く。既定では書かず、
 artifact rootと同一・配下・祖先、既存file、symlinkはexit 2で拒否する。
 診断の有無はcanonical audit / manifest bytesを変更しない。
+
+**artifact rootの書き込み（T1 / T1-R2、2026-09-25）**: v2、v3、v4、TypeScript v5、
+source review v6 は、次の手順で artifact root を作って書き込む。
+
+1. 従来の pathname 検査を行う。
+2. invocation root を directory fd として開き、`--artifacts` の各 component を
+   `O_NOFOLLOW|O_DIRECTORY` で辿る。
+3. root を、保持している親 fd の下に `mkdirat` で作る。
+4. 作った直後の root と `records/` を fd で開く。その fd について、次の3点を確かめる。
+   - 所有者が実効 uid であること
+   - permission bits が `0o777 & !umask` と一致すること
+   - 中身が空であること
+
+   満たさない dir は採用しない。その dir を変更も削除もせず、書き込む前に exit 20 で止まる。
+
+   umask の扱い:
+   - process の umask は変更しない。Linux では `/proc/self/status` の `Umask:` 行から読む。
+   - 読めないとき(Linux 以外の unix を含む)は、mode の比較だけを黙って省く。
+     - 製品の出力(stdout、stderr、exit code)には、省いたことは現れない。観測できるのは
+       test build の seam の counter だけである。
+     - それでも許容できる理由: 所有者の検査と空の検査はそのまま行う。したがって、他人の
+       dir や中身のある dir は、引き続き採用しない。見逃すのは、自分の uid で作られた空の
+       dir で、mode だけが違うものに限られる。
+   - 既知の保守的な制限: 空であることの検査には、作った dir に所有者の read と search の
+     権限が要る。これを外す特殊な umask(例: 0400、0100)では検査ができないので、
+     実行は常に exit 20 で止まる。
+   - 既知の保守的な制限: 環境によっては、作った root の所有者や mode が期待と違ってしまう。
+     例として、次の場合がある。
+     - 親 dir に default POSIX ACL がある。
+     - root-squash の NFS 上にある。
+     - 一部の FUSE mount 上にある。
+
+     この場合、検査が常に一致せず、毎回 exit 20 で止まる。安全側に倒れる挙動なので、
+     そのままにしている。
+5. file は保持している fd を基準に、`O_CREAT|O_EXCL|O_NOFOLLOW` で作る。
+6. 最初の entry を作る前と、最後の entry を作った後に、保持している fd の連鎖を
+   (dev, ino) で再確認する。symlink に差し替えられているなど、一致しなければ exit 20 とする。
+7. 失敗したときは、自分が作った entry だけを、非再帰で、identity を確認してから消す。
+   identity の stat が `ENOENT` を返した場合だけ、その entry は「無い」とみなす。
+   それ以外の error は失敗として記録し、entry は残す。stderr には
+   `unwind incomplete: "<entry>" (errno N)` を付ける。
+
+**運用上の注意:** 信頼できない共有 dir（他の利用者が書き込める dir）では、この CLI を
+攻撃者より高い権限（root など）で実行しないこと。
+
+**範囲外（残余）と未検証の事項:** 次の5つは閉じていない、または自動 test で確かめていない。
+
+1. (F1) 同じ filesystem の中で、本物の dir を rename する攻撃。例: fd を開いた後に、親 dir を
+   invocation root の外へ移す。これを行うには、subtree と移動先の両方に書き込み権限が
+   要る。「その actor はもともと出力を改ざんできるので、得る能力は増えない」という
+   議論が成り立つのは、rename する actor が CLI の実行と同じ実効権限を持つ場合に限る。
+   CLI をより高い権限で実行すると、この前提は崩れる。上の運用上の注意を参照。
+   POSIX では、権限を分離しない限り完全には閉じられない。
+2. 個々の file の書き込みの間に起きる差し替え。検出するのは、最初の entry の前と、
+   最後の entry の後の連鎖の再確認だけである。
+3. (V3) unwind で、identity を確認してから `unlinkat` するまでの間に、同じ名前の entry が
+   置き換えられる窓。その間に置かれた他人の file を消しうる。
+4. umask を読めない環境(Linux 以外の unix を含む)では、mode の比較を省く。この場合、
+   所有者と中身が同じで mode だけが違う dir への差し替えは検出できない。
+5. (U1) 所有者(uid)の検査は、自動 test で確かめていない。別の uid(chown、すなわち root)が
+   要るからである。実装はあるが、test で観測したことはない。
 v3 human reportはlive実行が返すbasis-bound
 `ValidatedGenericReviewRunV3`から直接生成する。bytes-only decodeが返す
 `UnvalidatedGenericReviewRunV3`からhuman report v2を生成する経路は持たない。

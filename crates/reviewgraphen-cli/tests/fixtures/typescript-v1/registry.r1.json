@@ -1,0 +1,132 @@
+{
+  "arms": [
+    {
+      "arm_id": "typescript.production.v1.source@1",
+      "extractor_definition": {
+        "grammar_bundle": {
+          "files": [
+            {"path": "common/scanner.h", "sha256": "sha256:da66ef2bd14a3f7ea743e25ba068c6c9aae2c3509db200ff80c4a0e6116e564c"},
+            {"path": "typescript/src/parser.c", "sha256": "sha256:74fe453edd70f4eae9af0a1050cbd7943d8971d59165b6aaebbaa0a0b716d1aa"},
+            {"path": "typescript/src/scanner.c", "sha256": "sha256:9125013b42cb888379d9be909f1d73dfb75a37626c2cdbf4122718a2b431a6d3"}
+          ],
+          "format": "reviewgraphen.typescript_grammar_bundle@1",
+          "sha256": "sha256:48934f086feab3af672f42a8dd17f0912058b68ed0b99c9b7d9c498cf28600e9"
+        },
+        "grammar_crate": {
+          "archive_sha256": "sha256:6c5f76ed8d947a75cc446d5fccd8b602ebf0cde64ccf2ffa434d873d7a575eff",
+          "name": "tree-sitter-typescript",
+          "version": "0.23.2"
+        },
+        "parser_runtime": {
+          "archive_sha256": "sha256:78f873475d258561b06f1c595d93308a7ed124d9977cb26b148c2084a4a3cc87",
+          "name": "tree-sitter",
+          "version": "0.25.10"
+        },
+        "policies": [
+          "typescript.relative_specifier@1",
+          "typescript.call_binding@1",
+          "typescript.call_reason_precedence@2"
+        ],
+        "producer_id": "reviewgraphen.ingest.typescript_tree_sitter@1",
+        "syntax_mode": "typescript"
+      },
+      "extractor_set_hash": "sha256:5feedacab3ab07da6152fc9e5a46ef3aabb188d98898cffd4b34f90aa7f30ae2",
+      "payload_descriptors": [
+        {
+          "definition": {
+            "additional_properties": false,
+            "record_role": "binding",
+            "required": ["local_name", "import_kind", "export_slot", "specifier", "specifier_range", "candidate_paths", "resolved_function_id", "evaluated_stages"]
+          },
+          "descriptor_hash": "sha256:58d5743ac1b1ac3219aca52820e983bd5cbc527bfebc4f23659019bbdcec0b63",
+          "descriptor_id": "reviewgraphen.typescript_syntax.binding@1"
+        },
+        {
+          "definition": {
+            "additional_properties": false,
+            "record_role": "call",
+            "required": ["caller_id", "callee_id", "resolution_kind", "binding_key", "candidate_witness_keys", "evaluated_stages"]
+          },
+          "descriptor_hash": "sha256:933ea62cc606efd1eda746cb2d9285ee004a9e98b3403107a0b402bb8d92d880",
+          "descriptor_id": "reviewgraphen.typescript_syntax.call@1"
+        },
+        {
+          "definition": {
+            "additional_properties": false,
+            "record_role": "callable",
+            "required": ["binding_key", "declaration_range", "implementation_range", "visibility_value", "binding_obstruction_keys"]
+          },
+          "descriptor_hash": "sha256:ab726cc400885aecea4182728e3d601644ff39ca400a55acc976df767278d03e",
+          "descriptor_id": "reviewgraphen.typescript_syntax.callable@1"
+        },
+        {
+          "definition": {
+            "additional_properties": false,
+            "record_role": "scope",
+            "required": ["scope_kind", "member_keys"]
+          },
+          "descriptor_hash": "sha256:c5c6ec6cddd326bcc05491a59bde3d0faeac3dfecb0b1f690406d35ed4b137da",
+          "descriptor_id": "reviewgraphen.typescript_syntax.scope@1"
+        },
+        {
+          "definition": {
+            "additional_properties": false,
+            "record_role": "surface",
+            "required": ["export_slots", "local_names", "target_specifier", "declaration_key"]
+          },
+          "descriptor_hash": "sha256:42b815a88e18b000b8949d8056f33c57fe6c4ad20ab5af597c851804d06777a9",
+          "descriptor_id": "reviewgraphen.typescript_syntax.surface@1"
+        }
+      ],
+      "profile_definition": {
+        "data": {
+          "category_precedence": ["vendor", "generated", "declaration", "test", "example", "docs"],
+          "exclusion_matchers": [
+            {"category": "vendor", "components": ["node_modules", "vendor", "vendored", "third_party"], "reason_id": "profile.exclude.vendor@1"},
+            {"category": "generated", "components": ["dist", "build", "out", "coverage", "generated", ".next"], "reason_id": "profile.exclude.generated@1", "suffixes": [".generated.ts", ".generated.tsx"]},
+            {"category": "declaration", "reason_id": "profile.exclude.declaration@1", "suffixes": [".d.ts"]},
+            {"basenames": ["test.ts", "tests.ts", "test.tsx", "tests.tsx"], "category": "test", "components": ["tests", "test", "__tests__", "__mocks__", "benches", "benchmarks"], "reason_id": "profile.exclude.test@1", "suffixes": [".test.ts", ".spec.ts", ".test.tsx", ".spec.tsx"]},
+            {"category": "example", "components": ["example", "examples"], "reason_id": "profile.exclude.example@1"},
+            {"category": "docs", "components": ["doc", "docs"], "reason_id": "profile.exclude.docs@1"}
+          ],
+          "id": "typescript.production.v1",
+          "path_normalization": "utf8-slash-case-sensitive-no-unicode-normalization",
+          "profile_version": "1",
+          "reason_ids": ["profile.exclude.vendor@1", "profile.exclude.generated@1", "profile.exclude.declaration@1", "profile.exclude.test@1", "profile.exclude.example@1", "profile.exclude.docs@1"],
+          "source": {"language": "typescript", "suffixes": [".ts"], "syntax_modes": ["typescript"]}
+        },
+        "descriptor_id": "reviewgraphen.typescript_profile@1"
+      },
+      "projection_definition": {
+        "deferred_reason": "context_projection_unavailable",
+        "id": "typescript.obligation_report@1",
+        "mode": "enumerate_and_defer",
+        "trusted_pass": false
+      },
+      "projection_hash": "sha256:3ceaf4de1982403fc2d3511f930c0a7aa18fa13255d2449c04123690bf5fc53e",
+      "profile_hash": "sha256:602483ac9ea899426e600b72f3fabba413de496908ece8341dc62617d857fb44",
+      "rules": [
+        {"coverage_layer": "snapshot_gap", "origin_rule_id": "relation.changed_public_callee@2", "property_id": "reviewgraphen.capability_gap", "rule_id": "capability_gap.origin_rule@1", "target_kind": "subgraph", "weight": "4.0"},
+        {"coverage_layer": "single_layer", "property_id": "typescript.public_function_contract_review@1", "rule_id": "node.public_function_contract@2", "target_kind": "node", "weight": "3.0"},
+        {"coverage_layer": "two_layer", "property_id": "typescript.callee_contract_review@1", "rule_id": "relation.changed_public_callee@2", "target_kind": "relation", "weight": "4.0"}
+      ],
+      "rule_set_hash": "sha256:4bbca92bc2b5bccd9ccfdd569055fe1465bed30304f94cb21ec1eba4b4f6ec2b",
+      "tuple": {
+        "extractor_set_hash": "sha256:5feedacab3ab07da6152fc9e5a46ef3aabb188d98898cffd4b34f90aa7f30ae2",
+        "language": "typescript",
+        "producer_id": "reviewgraphen.ingest.typescript_tree_sitter@1",
+        "profile_id": "typescript.production.v1",
+        "profile_version": "1",
+        "projection_id": "typescript.obligation_report@1",
+        "rule_set_hash": "sha256:4bbca92bc2b5bccd9ccfdd569055fe1465bed30304f94cb21ec1eba4b4f6ec2b"
+      },
+      "vocabularies": {
+        "call_reason_precedence": ["parse_failure", "unsupported_syntax", "unsupported_caller", "dynamic_dispatch", "relative_specifier_unsupported", "relative_target_unread", "relative_target_ambiguous", "relative_target_excluded", "relative_target_missing", "import_binding_ambiguous", "type_only_binding", "export_binding_unsupported", "import_resolution_unavailable", "shadowed_binding", "written_binding", "unresolved_name"],
+        "record_roles": ["callable", "call", "binding", "surface", "scope"],
+        "syntax_outcomes": ["eligible_public", "non_public", "not_runtime_callable", "out_of_scope", "unsupported", "resolved", "unresolved", "recorded"]
+      }
+    }
+  ],
+  "format": "reviewgraphen.source_review_registry@1",
+  "registry_id": "reviewgraphen.source_review_registry.r1"
+}

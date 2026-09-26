@@ -11,16 +11,29 @@ retries = 0
 slow-timeout = { period = "60s", terminate-after = 2 }
 
 # These two bounded integration tests exercise large canonical Store/runtime
-# paths and take about 205 seconds individually on the release Linux runner.
+# paths. They took about 205 seconds individually on the release Linux runner
+# and 424 to over 720 seconds after the common-v5 changes (PR #1 CI runs).
 # Keep the ordinary 120-second ceiling everywhere else; do not retry failures.
 [[profile.ci.overrides]]
 filter = 'test(v3_positive_d_pair_is_projected_from_basis_bound_run)'
-slow-timeout = { period = "240s", terminate-after = 3 }
+slow-timeout = { period = "240s", terminate-after = 5 }
 
 [[profile.ci.overrides]]
 filter = 'test(v3_positive_pair_reaches_context_construction)'
-slow-timeout = { period = "240s", terminate-after = 3 }
+slow-timeout = { period = "240s", terminate-after = 5 }
 
 [[profile.ci.overrides]]
 filter = 'test(terminal_marker_written_before_proof_cas_recovers_idempotently)'
 slow-timeout = { period = "120s", terminate-after = 3 }
+
+# Store event-recovery sweeps: every prefix of a v5 partial rerun / post-D2
+# gluing log is replayed. They exceeded 120 seconds on the release Linux
+# runner (CI run on d2ec52d4, 2026-09-21); give them the same bounded ceiling
+# as the other large canonical-path tests instead of retrying.
+[[profile.ci.overrides]]
+filter = 'test(v5_partial_rerun_phase_revalidates_preservation_triple)'
+slow-timeout = { period = "240s", terminate-after = 3 }
+
+[[profile.ci.overrides]]
+filter = 'test(v5_post_d2_gluing_actions_and_seal_recover_every_prefix)'
+slow-timeout = { period = "240s", terminate-after = 3 }

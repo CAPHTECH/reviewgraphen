@@ -40,3 +40,23 @@ path = "tests/public_function_node_rule.rs"
 [[test]]
 name = "context_effect_contract"
 path = "tests/context_effect_contract.rs"
+
+[[test]]
+name = "typescript_i1_profile_acceptance"
+path = "tests/typescript_i1_profile_acceptance.rs"
+
+[[test]]
+name = "typescript_s0_registry"
+path = "tests/typescript_s0_registry.rs"
+
+[[test]]
+name = "typescript_s0_registry_read"
+path = "tests/typescript_s0_registry_read.rs"
+
+[[test]]
+name = "typescript_i2_admitted_source_path"
+path = "tests/typescript_i2_admitted_source_path.rs"
+
+[[test]]
+name = "typescript_i2_declaration_id"
+path = "tests/typescript_i2_declaration_id.rs"

@@ -6,6 +6,7 @@
 
 pub mod diagnostics;
 pub mod generic;
+pub mod generic_v5;
 
 #[cfg(target_os = "linux")]
 pub mod fixed_offline;
